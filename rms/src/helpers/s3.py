@@ -1,5 +1,6 @@
 from datetime import datetime
 import os
+import requests
 from pathlib import Path
 import shutil
 import subprocess
@@ -103,11 +104,7 @@ def upload_backup_to_s3(
 ) -> dict:
     """
     Uploads the backup archive for date_str to S3.
-    If date_str is None, uses today's date (YYYY-MM-DD).
-    Looks for <out_root>/<YYYY-MM-DD>.rar (preferred) or .zip (fallback).
-    
-    Returns:
-      { ok, date, archive_path, bucket, key, error }
+    Hits notification API on success using credentials from .env.
     """
     date_str = date_str or datetime.now().strftime("%Y-%m-%d")
     root = Path(out_root).resolve()
@@ -123,12 +120,40 @@ def upload_backup_to_s3(
         return {"ok": False, "date": date_str, "archive_path": str(archive_path),
                 "bucket": None, "key": None, "error": "S3 bucket not set (S3_BUCKET)"}
 
-    key = f"{s3_prefix}/{archive_path.name}"  # e.g. mongo_update/2025-10-28.zip
+    key = f"{s3_prefix}/{archive_path.name}"
 
     try:
         s3 = _s3_client()
         logger.info(f"[backup] Uploading {archive_path} → s3://{bucket}/{key}")
         s3.upload_file(str(archive_path), bucket, key)
+
+        # ─── NOTIFICATION LOGIC ───
+        try:
+            # Fetching from .env as requested
+            notif_url = os.environ.get("NOTIFICATION_URL")
+            auth_token = os.environ.get("STATIC_TOKEN") 
+            
+            if notif_url and auth_token:
+                headers = {
+                    "X-Auth-Token": auth_token,
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "message": "database upload complete"
+                }
+
+                notif_res = requests.post(notif_url, json=payload, headers=headers, timeout=10)
+                if notif_res.status_code == 200:
+                    logger.info("✔ Notification sent: database upload complete")
+                else:
+                    logger.warning(f"✖ Notification failed (Status {notif_res.status_code}): {notif_res.text}")
+            else:
+                logger.error("✖ Missing NOTIFICATION_URL or STATIC_TOKEN in .env")
+                
+        except Exception as e:
+            logger.error(f"✖ Notification trigger crashed: {e}")
+        # ──────────────────────────
+
         return {
             "ok": True,
             "date": date_str,
@@ -137,6 +162,7 @@ def upload_backup_to_s3(
             "key": key,
             "error": None
         }
+
     except FileNotFoundError:
         return {"ok": False, "date": date_str, "archive_path": str(archive_path),
                 "bucket": bucket, "key": key, "error": "Archive file not found"}
