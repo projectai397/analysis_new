@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from threading import Lock
 from typing import Dict, Optional
-
+from dotenv import load_dotenv
 import jwt
 import requests
 from bson import ObjectId
@@ -31,7 +31,7 @@ from src.domain_guard import OOD_MESSAGE, guard_action, is_in_domain
 from src.faq_router import answer_from_faq, load_faqs
 from src.models import Chatroom, Message, ProUser, SCUser
 
-
+load_dotenv()
 # ────────────────────── ObjectId / JWT helpers ──────────────────────
 def _oid(v) -> Optional[ObjectId]:
     if not v:
@@ -268,45 +268,67 @@ def llm_fallback(user_msg: str):
         return " ".join(parts[:max_tokens]) if len(parts) > max_tokens else text
 
     try:
-        r = requests.post(
-            "http://127.0.0.1:11434/api/chat",
-            json={
-                "model": "phi:2.7b",
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are the ProTrader5 Support Bot.\n\n"
-                            "Rules (must follow exactly):\n"
-                            "- Only answer questions about: buy/sell orders, order types (limit/market/SL/TP), "
-                            "positions/PNL, margin/leverage, instruments/symbols, deposits/withdrawals/KYC, "
-                            "account access/login/OTP/password reset, and app/site usage.\n"
-                            "- If the user asks about password reset, give exact steps in the app/email flow.\n"
-                            "- If the user asks how to buy/sell, give clear steps: search symbol → select order type → quantity → price → confirm.\n"
-                            "- Answer in concise FAQ style (2–6 short steps or 2–4 sentences).\n"
-                            "- Keep the entire answer under 150 tokens.\n"
-                            "- No preface/disclaimers/stories/emoji."
-                        ),
-                    },
-                    {"role": "user", "content": user_msg},
-                ],
-                "stream": False,
-                "options": {"num_predict": 150, "temperature": 0.2},
-            },
-            timeout=60,
-        )
+        # Fetch the URL from the environment
+        llm_url = os.getenv("LLM_URL") 
+        
+        if not llm_url:
+            print("Error: LLM_URL is not set in environment variables.")
+            return "Sorry, there was an error with the support bot configuration."
+
+        # IMPORTANT: If your URL ends in /api/generate, change it to /api/chat 
+        # to match the "messages" format you are using.
+        if llm_url.endswith("/api/generate"):
+            llm_url = llm_url.replace("/api/generate", "/api/chat")
+
+        # Send the request to the LLM API
+        payload = {
+            "model": "phi:2.7b",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are the ProTrader5 Support Bot.\n\n"
+                        "Rules (must follow exactly):\n"
+                        "- Only answer questions about: buy/sell orders, order types (limit/market/SL/TP), "
+                        "positions/PNL, margin/leverage, instruments/symbols, deposits/withdrawals/KYC, "
+                        "account access/login/OTP/password reset, and app/site usage.\n"
+                        "- If the user asks about password reset, give exact steps in the app/email flow.\n"
+                        "- If the user asks how to buy/sell, give clear steps: search symbol → select order type → quantity → price → confirm.\n"
+                        "- Answer in concise FAQ style (2–6 short steps or 2–4 sentences).\n"
+                        "- Keep the entire answer under 150 tokens.\n"
+                        "- No preface/disclaimers/stories/emoji."
+                    ),
+                },
+                {"role": "user", "content": user_msg},
+            ],
+            "stream": False,
+            "options": {"num_predict": 150, "temperature": 0.2},
+        }
+
+        r = requests.post(llm_url, json=payload, timeout=60)
         r.raise_for_status()
         d = r.json()
-        content = (
-            d.get("message", {}).get("content")
-            or d.get("response")
-            or "Sorry, the support bot could not generate a reply."
-        )
-        return _truncate_tokens(content, 150)
-    except Exception as e:
-        print("LLM error:", e)
+
+        # Handle the Chat API response format: d['message']['content']
+        content = d.get("message", {}).get("content")
+        
+        # Fallback if content is missing from chat structure
+        if not content:
+            content = d.get("response")
+
+        if not content:
+            print(f"Error: The LLM response was empty for user message: {user_msg}")
+            print(f"Full Response: {d}") # Debugging
+            return "Sorry, the support bot could not generate a reply."
+
+        return _truncate_tokens(content.strip(), 150)
+
+    except requests.exceptions.RequestException as e:
+        print(f"Request error: {e}")
         return "Sorry, there was an error with our support bot. Please try again later."
-    return None
+    except Exception as e:
+        print(f"LLM error: {e}")
+        return "Sorry, there was an unexpected error. Please try again later."
 
 
 # ────────────────────── DB upserts ──────────────────────
