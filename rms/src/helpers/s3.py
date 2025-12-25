@@ -127,9 +127,8 @@ def upload_backup_to_s3(
         logger.info(f"[backup] Uploading {archive_path} → s3://{bucket}/{key}")
         s3.upload_file(str(archive_path), bucket, key)
 
-        # ─── NOTIFICATION LOGIC ───
+        # ─── UPDATED NOTIFICATION LOGIC ───
         try:
-            # Fetching from .env as requested
             notif_url = os.environ.get("NOTIFICATION_URL")
             auth_token = os.environ.get("STATIC_TOKEN") 
             
@@ -142,17 +141,30 @@ def upload_backup_to_s3(
                     "message": "database upload complete"
                 }
 
-                notif_res = requests.post(notif_url, json=payload, headers=headers, timeout=10)
-                if notif_res.status_code == 200:
-                    logger.info("✔ Notification sent: database upload complete")
-                else:
-                    logger.warning(f"✖ Notification failed (Status {notif_res.status_code}): {notif_res.text}")
+                # Increased timeout to 30 seconds to handle slow server response
+                try:
+                    notif_res = requests.post(
+                        notif_url, 
+                        json=payload, 
+                        headers=headers, 
+                        timeout=60
+                    )
+                    
+                    if notif_res.status_code == 200:
+                        logger.info("✅Database backup upload complete!")
+                    else:
+                        logger.warning(f"✖ Notification failed (Status {notif_res.status_code}): {notif_res.text}")
+                
+                except requests.exceptions.Timeout:
+                    logger.error(f"✖ Notification TIMEOUT: Server at {notif_url} did not respond in 30s.")
+                except requests.exceptions.RequestException as req_e:
+                    logger.error(f"✖ Notification Network Error: {req_e}")
             else:
                 logger.error("✖ Missing NOTIFICATION_URL or STATIC_TOKEN in .env")
                 
         except Exception as e:
-            logger.error(f"✖ Notification trigger crashed: {e}")
-        # ──────────────────────────
+            logger.error(f"✖ Notification logic failed: {e}")
+        # ──────────────────────────────────
 
         return {
             "ok": True,

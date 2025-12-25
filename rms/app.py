@@ -51,7 +51,7 @@ from src.helpers.build_service import (materialize_admins_analysis,
                                        materialize_masters_analysis,
                                        materialize_superadmins_analysis,
                                        materialize_superadmins_users)
-from src.helpers.s3 import backup_mongo_to_archive, upload_backup_to_s3
+from src.helpers.s3 import backup_mongo_to_archive, upload_backup_to_s3,download_backup_from_s3
 from src.helpers.util import sync_orders_to_trade
 from src.models import Chatroom, Message, ProUser, SCUser
 from werkzeug.utils import secure_filename
@@ -1754,12 +1754,13 @@ if __name__ == "__main__":
         except Exception as e:
             logger.exception(f"✖ Daily backup crashed: {e}")
 
-    schedule.every().day.at("00:00").do(
+    schedule.every().day.at("12:06").do(
         lambda: _run_async(_daily_backup_job, "backup-03")
     )
 
     def _daily_upload_job():
         try:
+            # Upload the backup to S3
             res_up = upload_backup_to_s3(
                 date_str=None,
                 out_root="backups",
@@ -1770,12 +1771,26 @@ if __name__ == "__main__":
                 logger.info(
                     f"✔ Daily upload done → s3://{res_up['bucket']}/{res_up['key']}"
                 )
+
+                # Now, download the backup from S3
+                res_down = download_backup_from_s3(
+                    date_str=None,
+                    out_root="backups",
+                    bucket=res_up['bucket'],
+                    s3_prefix="mongo_backup",
+                )
+                if res_down.get("ok"):
+                    logger.info(
+                        f"✔ Backup downloaded successfully from S3 → {res_down['downloaded_to']}"
+                    )
+                else:
+                    logger.error(f"✖ Backup download failed → {res_down.get('error')}")
             else:
                 logger.error(f"✖ Daily upload failed → {res_up.get('error')}")
         except Exception as e:
             logger.exception(f"✖ Daily upload crashed: {e}")
 
-    schedule.every().day.at("00:20").do(
+    schedule.every().day.at("12:08").do(
         lambda: _run_async(_daily_upload_job, "upload-04")
     )
 
@@ -1798,7 +1813,7 @@ if __name__ == "__main__":
         except Exception as e:
             logger.exception(f"✖ Daily cleanup crashed: {e}")
 
-    schedule.every().day.at("00:25").do(
+    schedule.every().day.at("12:10").do(
         lambda: _run_async(_daily_cleanup_job, "cleanup-05")
     )
 
