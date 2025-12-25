@@ -973,17 +973,19 @@ def find_best_faq_match(user_text: str, faqs: List[Dict[str, str]]) -> Tuple[Dic
     return best_row, best_score
 
 async def summarize_with_ollama_phi(answer_text: str) -> str:
-    base_url = getattr(config, "OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    # 1. Fetch URL from .env (LLM_URL)
+    llm_url = os.getenv("LLM_URL", "http://127.0.0.1:11434")
     model = getattr(config, "OLLAMA_PHI_MODEL", "phi:2.7b")
 
+    # 2. Strict Prompt to prevent the AI from adding introductions or "TradingX" 
+    # unless it is in the original text.
     prompt = (
-        "You are an FAQ assistant.\n"
-        "Summarize the FAQ answer into a direct response for the user.\n"
+        "Instructions: Summarize the text below into exactly 3 to 4 lines.\n"
         "Rules:\n"
-        "- Use only the provided FAQ answer.\n"
-        "- Do not add new information.\n"
-        "- Keep it concise (max 80 words).\n\n"
-        f"FAQ Answer:\n{answer_text}\n"
+        "- Do not say 'Hi' or 'I am an assistant'.\n"
+        "- Do not add any information not found in the text.\n"
+        "- Start the summary immediately.\n\n"
+        f"Text to summarize:\n{answer_text}\n"
     )
 
     payload = {
@@ -991,18 +993,30 @@ async def summarize_with_ollama_phi(answer_text: str) -> str:
         "prompt": prompt,
         "stream": False,
         "options": {
-            "num_ctx": 2048,   # phi2 n_ctx_train=2048, avoid the 4096 warning
+            "num_ctx": 2048,
+            "temperature": 0.1, # Lower temperature makes it more literal/strict
+            "num_predict": 100   # Limit output length at the model level
         },
-        "keep_alive": "10m",  # keeps model loaded in memory for future requests
+        "keep_alive": "10m",
     }
 
     try:
-        # IMPORTANT: large timeout for first model load
+        # 3. Safe URL handling to prevent /api/generate/api/generate
+        target_url = llm_url.rstrip('/')
+        if "/api/generate" not in target_url:
+            target_url = f"{target_url}/api/generate"
+
         async with httpx.AsyncClient(timeout=httpx.Timeout(180.0), trust_env=False) as client:
-            r = await client.post(f"{base_url}/api/generate", json=payload)
+            r = await client.post(target_url, json=payload)
             r.raise_for_status()
+            
             data = r.json()
             out = (data.get("response") or "").strip()
+            
+            # If the LLM still adds a prefix like "Summary:", we strip it
+            if ":" in out[:15]:
+                out = out.split(":", 1)[-1].strip()
+
             return out or answer_text
 
     except Exception as e:
