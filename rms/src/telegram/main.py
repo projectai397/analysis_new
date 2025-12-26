@@ -572,26 +572,7 @@ async def handle_subscription_query(update: Update, context: ContextTypes.DEFAUL
     if action == "subscribe":
         await subscribe_user(mongo_user_id, role, chat_id) 
         action_text = "Subscribed"
-
-        # Test notification logic (Kept from your original code)
-        test_trade_data = {
-            "symbolName": "TEST_SUB",
-            "totalQuantity": 5,
-            "price": "50,000",
-            "orderType": "MARKET",
-            "tradeType": "BUY"
-        }
-        trade_message = f"📊 <b>Test Trade Notification</b>\nRole: {role.capitalize()} - ID: <code>{mongo_user_id}</code>\n\n" \
-                        f"Symbol: {test_trade_data['symbolName']}\n" \
-                        f"Quantity: {test_trade_data['totalQuantity']}\n" \
-                        f"Price: {test_trade_data['price']}\n" \
-                        f"Order Type: {test_trade_data['orderType']}\n" \
-                        f"Trade Type: {test_trade_data['tradeType']}"
-        try:
-            await context.bot.send_message(chat_id, trade_message, parse_mode="HTML")
-        except Exception as e:
-            logger.warning(f"Failed to send test trade notification to {chat_id}: {e}")
-
+        
     elif action == "unsubscribe":
         await unsubscribe_user(mongo_user_id, chat_id) 
         action_text = "Unsubscribed"
