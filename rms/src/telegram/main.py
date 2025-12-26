@@ -285,12 +285,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat = update.effective_chat
 
     # ---- SEND IMAGE + CAPTION ----
-    image_path = os.path.join(os.path.dirname(__file__), "logo.png")
+    image_path = os.path.join(os.path.dirname(__file__), "logso.png")
 
     if os.path.exists(image_path):
         try:
             with open(image_path, "rb") as f:
-                msg = await chat.send_photo(photo=f, caption="🎯 Welcome to 500x exchange Bot")
+                msg = await chat.send_photo(photo=f, caption="🎯 Welcome to Bot")
                 remember_bot_message_from_message(update, msg)
         except Exception as e:
             logger.warning(f"Logo image send failed: {e}")
@@ -572,7 +572,7 @@ async def handle_subscription_query(update: Update, context: ContextTypes.DEFAUL
     if action == "subscribe":
         await subscribe_user(mongo_user_id, role, chat_id) 
         action_text = "Subscribed"
-        
+
     elif action == "unsubscribe":
         await unsubscribe_user(mongo_user_id, chat_id) 
         action_text = "Unsubscribed"
