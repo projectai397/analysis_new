@@ -64,6 +64,7 @@ USER_SESSION_EXPIRES: Dict[int, float] = {}
 
 SESSION_TIMEOUT_SECONDS = 600 
 
+BOT_TOKENS = [config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_BOT_TOKEN_1]
 
 def build_login_payload(login_id: str, password: str) -> dict:
     raw = login_id.strip()
@@ -703,37 +704,55 @@ async def handle_real_trade(trade_data: dict, context: CallbackContext):
 
 # NOTE: The original `notify_role_of_trade` is removed as it was redundant/unused.
 
-
-def listen_for_trade_changes():
+def listen_for_trade_changes(app_instance):
     """
     Runs the MongoDB Change Stream in a separate thread.
+    Waits for the bot to initialize before starting the stream.
     """
     try:
-        if 'app' not in globals():
-            logger.error("Error: Global 'app' not found. Cannot start trade listener.")
-            return
+        # 1. Wait for bot initialization
+        # The bot property exists, but it's not 'ready' until initialize() is done.
+        retries = 0
+        while retries < 10:
+            try:
+                # Accessing a bot property to check if it's initialized
+                _ = app_instance.bot.id 
+                break
+            except Exception:
+                logger.info("⏳ Waiting for bot initialization...")
+                time.sleep(1)
+                retries += 1
 
-        app_instance = globals()['app']
         bot_instance = app_instance.bot 
+        logger.info(f"📡 Trade listener started for bot: @{bot_instance.username}")
 
-        # Watch tele_notification collection for inserts only
+        # 2. Watch tele_notification collection
         with tele_notification.watch(full_document='updateLookup') as stream:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
             for change in stream:
                 if change['operationType'] == 'insert':
-                    logger.info(
-                        f"Change detected: INSERT on tele_notification collection."
-                    )
-
-                    def run_async_update():
-                        loop.run_until_complete(handle_trade_update(change, bot_instance))
-
-                    run_async_update()
+                    logger.info("Change detected: INSERT on tele_notification collection.")
+                    
+                    # Run notification logic
+                    loop.run_until_complete(handle_trade_update(change, bot_instance))
 
     except Exception as e:
-        logger.error(f"Error in change stream: {e}")
+        logger.error(f"Error in change stream thread: {e}")
+
+def start_trade_listener(app_instance):
+    """
+    Start the MongoDB Change Stream listener in a separate thread,
+    passing the specific app instance.
+    """
+    # 🚨 FIX: We pass app_instance via the 'args' parameter of the Thread
+    listener_thread = threading.Thread(
+        target=listen_for_trade_changes, 
+        args=(app_instance,)
+    )
+    listener_thread.daemon = True 
+    listener_thread.start()
 
 
 # NOTE: The original `handle_trade_update` is removed as it was moved/simplified in the earlier update.
@@ -819,14 +838,9 @@ async def get_chat_ids_for_role(role: str):
         return []
 
 
-def start_trade_listener():
-    """
-    Start the MongoDB Change Stream listener in a separate thread.
-    """
-    listener_thread = threading.Thread(target=listen_for_trade_changes)
-    listener_thread.daemon = (
-        True 
-    )
+def start_trade_listener(app_instance): 
+    listener_thread = threading.Thread(target=listen_for_trade_changes, args=(app_instance,))
+    listener_thread.daemon = True 
     listener_thread.start()
 
 async def subscribe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1192,7 +1206,7 @@ async def handle_free_text_faq(update: Update, context: ContextTypes.DEFAULT_TYP
 # ============================================================
 
 
-async def _set_bot_commands(app):
+def _set_bot_commands(app):
     """
     Set slash commands so /alerts also appears in the UI.
     """
@@ -1206,66 +1220,90 @@ async def _set_bot_commands(app):
         BotCommand("me", "Who am I / role info"),
         BotCommand("cancel", "Cancel current operation"),
     ]
-    await app.bot.set_my_commands(commands)
+    app.bot.set_my_commands(commands)
 
 
-def build_application():
+def build_application(token: str):
     """
-    This function initializes the bot application and registers various handlers.
+    Initializes the bot application and registers various handlers.
+    Fixed to pass the 'app' instance to the trade listener to avoid global errors.
     """
-    # Create the bot application
-    app = (ApplicationBuilder()
-        .token(config.TELEGRAM_BOT_TOKEN) 
-        .post_init(_set_bot_commands) 
-        .build()
-    )
-    
-    # 🔹 CRITICAL: Make 'app' global so the listener thread can access the bot instance
-    globals()['app'] = app
+    # 1. Create the bot application
+    app = ApplicationBuilder().token(token).post_init(_set_bot_commands).build()
 
-    # Register authentication handlers (for login flow)
+    # 2. Register authentication handlers (Login flow)
     register_auth_handlers(app)
 
-    # Import and register other modules AFTER shared functions are defined
+    # 3. Import and register feature modules
     from .users import register_user_handlers
     from .positions import register_position_handlers
     from .trades import register_trade_handlers
-    from .alerts import register_alert_handlers 
-    from .transactions import (
-        register_transaction_handlers,
-    ) 
+    from .alerts import register_alert_handlers
+    from .transactions import register_transaction_handlers
 
-    # Register the handlers
     register_user_handlers(app)
     register_position_handlers(app)
     register_trade_handlers(app)
-    register_alert_handlers(app) 
+    register_alert_handlers(app)
     register_transaction_handlers(app)
-    start_trade_listener()
+
+    # 4. 🚨 CRITICAL FIX: Pass 'app' to the listener
+    # This prevents the "Global 'app' not found" error in your threads.
+    start_trade_listener(app)
+
+    # 5. Add FAQ handler
+    # We use a separate group so it doesn't conflict with ConversationHandlers
     app.add_handler(
-    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text_faq),
-    group=99)
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text_faq), 
+        group=99
+    )
 
-    # NOTE: The old `app.add_handler(CallbackQueryHandler(button_callback, pattern="^(subscribe|unsubscribe)"))`
-    # is replaced by the pattern in `register_auth_handlers`.
-
-    # Return the bot application instance
     return app
 
 
-def run_bot():
-    import asyncio
-
+async def start_bot(token):
+    # 🚨 CHANGE THIS: Call build_application instead of creating a bare app
+    app = build_application(token) 
+    
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(drop_pending_updates=True)
+    
     try:
-        logger.info("🚀 Telegram bot starting...")
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        await app.stop()
+        await app.shutdown()
+
+def run_bot_instance(token: str):
+    try:
+        logger.info(f"🚀 Starting bot with token: {token}")
+        
+        # Create and set a new loop for this specific thread
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-
-        app = build_application()
-        app.run_polling(drop_pending_updates=True)
+        
+        # Run the async start_bot function
+        loop.run_until_complete(start_bot(token))
     except Exception as e:
-        logger.exception(f"Telegram bot crashed: {e}")
+        logger.exception(f"Bot with token {token} crashed: {e}")
 
+def run_multiple_bots():
+    """
+    Function to run multiple bot instances concurrently by starting each in a separate thread.
+    """
+    threads = []
+    
+    for token in BOT_TOKENS:
+        # Create a new thread for each bot instance
+        thread = threading.Thread(target=run_bot_instance, args=(token,))
+        threads.append(thread)
+        thread.start()
+
+    # Wait for all threads to finish
+    for thread in threads:
+        thread.join()
 
 if __name__ == "__main__":
-    run_bot()
+    run_multiple_bots()

@@ -48,7 +48,7 @@ class Settings:
     # ==== Telegram / RMS Bot settings ====
     # Bot token from BotFather
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
+    TELEGRAM_BOT_TOKEN_1 = os.getenv("TELEGRAM_BOT_TOKEN_1")
     # Base URL of your RMS HTTP API that the bot will call for login etc.
     # Example in .env: RMS_API_BASE_URL="http://127.0.0.1:8001"
     RMS_API_BASE_URL = os.getenv("RMS_API_BASE_URL", "http://127.0.0.1:8001")
