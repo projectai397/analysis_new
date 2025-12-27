@@ -64,7 +64,7 @@ USER_SESSION_EXPIRES: Dict[int, float] = {}
 
 SESSION_TIMEOUT_SECONDS = 600 
 
-BOT_TOKENS = [config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_BOT_TOKEN_1]
+BOT_TOKENS = [config.TELEGRAM_BOT_TOKEN]
 
 def build_login_payload(login_id: str, password: str) -> dict:
     raw = login_id.strip()
