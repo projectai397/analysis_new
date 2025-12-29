@@ -60,3 +60,4 @@ next-env.d.ts
 /tws_sync
 
 my_changes.patch
+rms/src/telegram/bots.json
