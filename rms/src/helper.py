@@ -145,26 +145,41 @@ def cache_set(q: str, a):
 
 
 # ────────────────────── Text helpers ──────────────────────
+ABBREV_MAP = {
+    "sl": "stop loss",
+    "tp": "take profit",
+    "pnl": "profit and loss",
+    "kyc": "kyc",
+    "otp": "otp",
+    "2fa": "two factor authentication",
+    "mkt": "market order",
+    "mt": "market order",
+    "lmt": "limit order",
+    "limit": "limit",
+    "market": "market",
+}
+
 def _normalize(t: str) -> str:
     t = t or ""
-    # unify quotes
     t = t.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
-    # lower + strip
     t = t.lower().strip()
 
-    # common contractions / variants
-    repl = {
-        r"\bwasn't\b": "was not",
-        r"\bcan't\b": "cannot",
-        r"\bdon't\b": "do not",
-        r"\bforgot\b": "forget",  # align tense for matching
-        r"\breseting\b": "resetting",
-        r"\bpass word\b": "password",
-        r"[\?\!\.\,]+": " ",  # drop punct
-        r"\s+": " ",
-    }
-    for pat, rep in repl.items():
-        t = re.sub(pat, rep, t)
+    # Replace punctuation incl Hindi danda "।"
+    t = re.sub(r"[।\?\!\.\,]+", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+
+    # Expand abbreviations token-wise (scales without thousands of rules)
+    tokens = t.split()
+    out = []
+    for tok in tokens:
+        out.append(ABBREV_MAP.get(tok, tok))
+    t = " ".join(out)
+
+    # Common variants
+    t = re.sub(r"\bforgot\b", "forget", t)
+    t = re.sub(r"\bpass\s+word\b", "password", t)
+    t = re.sub(r"\breseting\b", "resetting", t)
+    t = re.sub(r"\s+", " ", t).strip()
     return t
 
 
@@ -181,166 +196,195 @@ def _similar_ratio(a: str, b: str) -> float:
     return 100.0 * SequenceMatcher(None, _normalize(a), _normalize(b)).ratio()
 
 
-def _keyword_boost(query: str, keyword: str) -> float:
-    """
-    Base similarity plus a small boost if key terms overlap.
-    Helps cases like 'how to forgot password' vs 'how do i reset my password'.
-    """
-    base = _similar_ratio(query, keyword)  # 0..100
-    qtok = _tokenize(query)
-    ktok = _tokenize(keyword)
-    overlap = len(qtok & ktok)
-    boost = min(overlap * 2.5, 10.0)  # up to +10
-    return min(base + boost, 100.0)
+_GREET_PAT = re.compile(
+    r"^(hi|hii|hello|hey|heyy|good\s+morning|good\s+afternoon|good\s+evening)\b",
+    re.I,
+)
 
+_BANNED_PHRASES = [
+    "as an ai", "as a language model", "i am an ai", "i'm an ai", "language model",
+    "i don't have access", "i cannot access", "i can't access",
+    "imagine that you are", "market research analyst",
+]
 
+_BANNED_NAMES = [
+    "protrader5", "pt5",
+]
+
+def _is_greeting(text: str) -> bool:
+    return bool(_GREET_PAT.match((text or "").strip()))
+
+def _clean_llm_text(text: str) -> str:
+    t = (text or "").strip()
+    if not t:
+        return ""
+
+    lines = [ln.strip() for ln in t.splitlines() if ln.strip()]
+    kept = []
+    for ln in lines:
+        low = ln.lower()
+        if any(p in low for p in _BANNED_PHRASES):
+            continue
+        if any(n in low for n in _BANNED_NAMES):
+            # remove line containing your brand/platform name
+            continue
+        kept.append(ln)
+
+    t = " ".join(kept)
+    for n in _BANNED_NAMES:
+        t = re.sub(re.escape(n), "", t, flags=re.I)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+def _enforce_medium_length(text: str, min_words: int = 80, max_words: int = 130) -> str:
+    words = (text or "").split()
+    if len(words) > max_words:
+        return " ".join(words[:max_words]).strip()
+    return (text or "").strip()
+
+def _to_lines(x) -> Optional[list[str]]:
+    if not x:
+        return None
+    if isinstance(x, list):
+        return [str(i).strip() for i in x if str(i).strip()]
+    s = str(x).strip()
+    if not s:
+        return None
+    return [ln.strip() for ln in s.splitlines() if ln.strip()]
 def _similar(a, b, thr=0.7):
     return SequenceMatcher(None, a, b).ratio() > thr
-
 
 # ────────────────────── FAQ + LLM fallback ──────────────────────
 def faq_reply(user_msg: str):
     """
-    Best-match the user message against FAQ keywords.
-    - Picks the single best FAQ across all keywords.
-    - Uses robust similarity with optional RapidFuzz.
-    - Returns the reply EXACTLY as stored (array or string).
+    Match user message against stored FAQ questions
+    using fuzzy similarity.
+    Returns the answer exactly as stored, or None.
     """
+
     if not user_msg:
         return None
 
     q = _normalize(user_msg)
-    BEST = None  # (score, faq_doc)
+    BEST = None  # (score, doc)
 
     try:
-        # Tune this threshold: 0..100. 70–75 works well; lower if your phrasing varies a lot.
-        THRESH = 72.0
+        THRESH = 72.0  # good balance for short questions like "what is sl?"
 
-        cursor = faqs_coll.find({}, {"_id": 1, "keywords": 1, "reply": 1, "rating": 1})
-        for faq in cursor:
-            keywords = faq.get("keywords", []) or []
-            # compute best keyword score for this FAQ
-            best_kw_score = 0.0
-            for kw in keywords:
-                if not kw:
-                    continue
-                score = _keyword_boost(q, kw)
-                if score > best_kw_score:
-                    best_kw_score = score
+        cursor = faqs_coll.find({}, {"_id": 1, "question": 1, "answer": 1})
+        for doc in cursor:
+            qq = _normalize(doc.get("question", ""))
+            if not qq:
+                continue
 
-            # keep the best overall FAQ
-            if best_kw_score > THRESH and (BEST is None or best_kw_score > BEST[0]):
-                BEST = (best_kw_score, faq)
+            score = _similar_ratio(q, qq)
+
+            if score >= THRESH and (BEST is None or score > BEST[0]):
+                BEST = (score, doc)
 
         if BEST:
-            _, faq = BEST
-            faqs_coll.update_one({"_id": faq["_id"]}, {"$inc": {"rating": 1}})
-            # return EXACT reply as stored (list or string)
-            return faq.get("reply", [])
+            _, doc = BEST
+            return doc.get("answer")
 
     except Exception as e:
         print("faq_reply error:", e)
 
     return None
 
-
-def llm_fallback(user_msg: str):
+def llm_fallback(user_msg: str) -> str:
     """
-    1) Try local fuzzy FAQ (faq_reply) → exact stored response.
-    2) Try your semantic router (answer_from_faq).
-    3) Domain guard:
-        - answer  → LLM concise reply (<=150 tokens)
-        - clarify → short, single question to steer to in-app context
-        - refuse  → OOD_MESSAGE (only for clear off-topic)
+    Policy:
+    - Greeting -> short greeting only.
+    - If FAQ exists -> return FAQ answer (no LLM).
+    - If out of domain -> polite refusal.
+    - Else -> LLM answer: simple, generic, medium length (~90–120 words), no AI talk, no platform name.
     """
-    # 1) Local fuzzy FAQ
-    faq = faq_reply(user_msg)
-    if faq:
-        return faq
 
-    # 2) Semantic router
+    # 0) Greetings
+    if _is_greeting(user_msg):
+        return "Hello. How can I help you today?"
+
+    # 1) FAQ first
+    faq_lines = faq_reply(user_msg)
+    if faq_lines:
+        return "\n".join(faq_lines)
+
+    # 2) Domain guard (strong)
+    ga = guard_action(user_msg)
+    if ga["action"] == "refuse":
+        return ga["message"]
+
+    # 3) Semantic router (optional; only if you want it)
+    # If your answer_from_faq can hallucinate, keep it disabled or keep it after guard.
     try:
         sem = answer_from_faq(user_msg)
-        if sem:
-            return sem
+        sem_lines = _to_lines(sem)
+        if sem_lines:
+            return "\n".join(sem_lines)
     except Exception as e:
         print("answer_from_faq error:", e)
 
-    # 3) Domain guard
-    ga = guard_action(user_msg)
-    if ga["action"] == "clarify":
-        return ga["prompt"]
-    if ga["action"] == "refuse":
-        return ga["message"]
-    # 'answer' → continue below
-
-    # LLM answer (concise, on-topic)
-    def _truncate_tokens(text: str, max_tokens: int = 150) -> str:
-        parts = text.split()
-        return " ".join(parts[:max_tokens]) if len(parts) > max_tokens else text
-
-    try:
-        # Fetch the URL from the environment
-        llm_url = os.getenv("LLM_URL") 
-        
+    # 4) LLM answer
+    def _call_llm(system_prompt: str) -> str:
+        llm_url = os.getenv("LLM_URL")
         if not llm_url:
-            print("Error: LLM_URL is not set in environment variables.")
-            return "Sorry, there was an error with the support bot configuration."
+            print("Error: LLM_URL not set.")
+            return ""
 
-        # IMPORTANT: If your URL ends in /api/generate, change it to /api/chat 
-        # to match the "messages" format you are using.
         if llm_url.endswith("/api/generate"):
             llm_url = llm_url.replace("/api/generate", "/api/chat")
 
-        # Send the request to the LLM API
         payload = {
             "model": "phi:2.7b",
             "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are the ProTrader5 Support Bot.\n\n"
-                        "Rules (must follow exactly):\n"
-                        "- Only answer questions about: buy/sell orders, order types (limit/market/SL/TP), "
-                        "positions/PNL, margin/leverage, instruments/symbols, deposits/withdrawals/KYC, "
-                        "account access/login/OTP/password reset, and app/site usage.\n"
-                        "- If the user asks about password reset, give exact steps in the app/email flow.\n"
-                        "- If the user asks how to buy/sell, give clear steps: search symbol → select order type → quantity → price → confirm.\n"
-                        "- Answer in concise FAQ style (2–6 short steps or 2–4 sentences).\n"
-                        "- Keep the entire answer under 150 tokens.\n"
-                        "- No preface/disclaimers/stories/emoji."
-                    ),
-                },
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_msg},
             ],
             "stream": False,
-            "options": {"num_predict": 150, "temperature": 0.2},
+            "options": {"num_predict": 220, "temperature": 0.2},
         }
 
         r = requests.post(llm_url, json=payload, timeout=60)
         r.raise_for_status()
         d = r.json()
+        return (d.get("message", {}).get("content") or d.get("response") or "").strip()
 
-        # Handle the Chat API response format: d['message']['content']
-        content = d.get("message", {}).get("content")
-        
-        # Fallback if content is missing from chat structure
-        if not content:
-            content = d.get("response")
+    SYSTEM = (
+        "You are a customer support agent for a trading app.\n"
+        "Answer ONLY trading support questions: buy/sell orders, order types (market/limit), stop loss/take profit, "
+        "positions/PNL, margin/leverage, symbols, deposits/withdrawals/KYC, login/OTP/password reset.\n"
+        "Rules:\n"
+        "- Do NOT mention any website/company/platform name.\n"
+        "- Do NOT mention AI, models, or system messages.\n"
+        "- Use simple English.\n"
+        "- Give a clear, practical answer.\n"
+        "- Target length: 90–120 words.\n"
+    )
 
-        if not content:
-            print(f"Error: The LLM response was empty for user message: {user_msg}")
-            print(f"Full Response: {d}") # Debugging
-            return "Sorry, the support bot could not generate a reply."
+    try:
+        raw = _call_llm(SYSTEM)
+        cleaned = _clean_llm_text(raw)
+        cleaned = _enforce_medium_length(cleaned, 80, 130)
 
-        return _truncate_tokens(content.strip(), 150)
+        # If too short after cleaning, regenerate once with extra instruction
+        if len(cleaned.split()) < 60:
+            raw2 = _call_llm(SYSTEM + "Make it 90–120 words by adding practical steps.")
+            cleaned2 = _clean_llm_text(raw2)
+            cleaned2 = _enforce_medium_length(cleaned2, 80, 130)
+            if cleaned2:
+                cleaned = cleaned2
+
+        if not cleaned:
+            return "Please ask about orders, account access, or payments."
+
+        return cleaned
 
     except requests.exceptions.RequestException as e:
-        print(f"Request error: {e}")
-        return "Sorry, there was an error with our support bot. Please try again later."
+        print("Request error:", e)
+        return "Sorry, something went wrong. Please try again."
     except Exception as e:
-        print(f"LLM error: {e}")
-        return "Sorry, there was an unexpected error. Please try again later."
+        print("LLM error:", e)
+        return "Sorry, something went wrong. Please try again."
 
 
 # ────────────────────── DB upserts ──────────────────────
@@ -1316,10 +1360,16 @@ def cancel_pending_bot_reply(chat_id: str):
                 pass
 
 def generate_bot_reply_lines(text: str) -> list[str]:
-    reply = cache_get(text) or faq_reply(text)
-    if reply:
-        cache_set(text, reply)
-        return reply
+    cached = cache_get(text)
+    if cached:
+        lines = _to_lines(cached)
+        if lines:
+            return lines
+
+    faq_lines = faq_reply(text)
+    if faq_lines:
+        cache_set(text, faq_lines)
+        return faq_lines
 
     ai = llm_fallback(text)
     lines = [ln.strip() for ln in (ai or "").split("\n") if ln.strip()]
