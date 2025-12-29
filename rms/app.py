@@ -45,7 +45,8 @@ from src.helper import (_oid, cache_get, cache_set, chatroom_with_messages,
                         llm_fallback, mark_role_join, mark_role_leave,
                         msg_dict, now_ist_iso, repeated_user_questions,
                         room_add, room_broadcast, room_remove,
-                        save_demo_message, upsert_support_user_from_jwt)
+                        save_demo_message, upsert_support_user_from_jwt,is_any_staff_present,cancel_pending_bot_reply,generate_bot_reply_lines,schedule_bot_reply_after_2m,
+                        _can_ask_and_inc,_utc_day_key)
 # materializers (analytics)
 from src.helpers.build_service import (materialize_admins_analysis,
                                        materialize_masters_analysis,
@@ -55,6 +56,8 @@ from src.helpers.s3 import backup_mongo_to_archive, upload_backup_to_s3,download
 from src.helpers.util import sync_orders_to_trade
 from src.models import Chatroom, Message, ProUser, SCUser
 from werkzeug.utils import secure_filename
+from threading import Lock, Timer
+from zoneinfo import ZoneInfo
 # ─────────────────────────────────────────────────────────────
 # Logging
 # ─────────────────────────────────────────────────────────────
@@ -84,7 +87,13 @@ _last_result_users = None
 _last_result_admins = None
 _last_result_masters = None
 
-
+PENDING_LOCK = Lock()
+PENDING_BOT_TIMERS: dict[str, Timer] = {}
+PENDING_USER_TEXT: dict[str, str] = {}   # optional: keep last user question
+STAFF_ENGAGED: dict[str, bool] = {}
+WS_IDLE_TIMEOUT_SECONDS = int(os.getenv("WS_IDLE_TIMEOUT_SECONDS", "300"))   # 5 min default
+WS_DAILY_USER_LIMIT     = int(os.getenv("WS_DAILY_USER_LIMIT", "20"))       # 20 default
+_DAILY_QA_COUNTS = {}
 # ─────────────────────────────────────────────────────────────
 # Analytics job runners
 # ─────────────────────────────────────────────────────────────
@@ -546,6 +555,31 @@ def create_app() -> Flask:
         chat = None
         chat_id = None
         conn_role = "user"
+
+        # ✅ track last activity (use dict so watchdog can read updated value)
+        last_activity = {"ts": time.time()}
+        stop_watchdog = threading.Event()
+
+        # ✅ WATCHDOG: disconnect if no activity for N seconds (because ws.receive() blocks)
+        def _idle_watchdog():
+            while not stop_watchdog.is_set():
+                try:
+                    if (time.time() - last_activity["ts"]) > WS_IDLE_TIMEOUT_SECONDS:
+                        try:
+                            ws.send(json.dumps({"type": "error", "error": "idle_timeout"}))
+                        except Exception:
+                            pass
+                        try:
+                            ws.close()
+                        except Exception:
+                            pass
+                        break
+                except Exception:
+                    break
+                time.sleep(2)  # check every 2s
+
+        threading.Thread(target=_idle_watchdog, daemon=True).start()
+
         try:
             su = upsert_support_user_from_jwt()
             pro_id = su.user_id
@@ -577,6 +611,10 @@ def create_app() -> Flask:
             if is_user:
                 chat = ensure_chatroom_for_pro(pro_id)
                 chat_id = str(chat.id)
+
+                # ✅ Ensure engaged state exists; default False
+                STAFF_ENGAGED.setdefault(chat_id, False)
+
                 conn_role = "user"
                 room_add(chat_id, ws)
                 mark_role_join(chat, conn_role, ws)
@@ -585,139 +623,100 @@ def create_app() -> Flask:
                         {"type": "joined", "chat_id": chat_id, "role": conn_role}
                     )
                 )
+                last_activity["ts"] = time.time()   # ✅ touch
             else:
-                # ❌ do NOT overwrite conn_role with bucket_role here,
-                # otherwise admin/master will appear as "superadmin"
-                # conn_role = bucket_role
-
                 # --- open a specific chatroom by id ---
                 if qs_chatroom_id:
                     picked = Chatroom.objects(id=_oid(qs_chatroom_id)).first()
                     if not picked:
-                        ws.send(
-                            json.dumps({"type": "error", "error": "chatroom_not_found"})
-                        )
+                        ws.send(json.dumps({"type": "error", "error": "chatroom_not_found"}))
+                        last_activity["ts"] = time.time()
                         return
 
                     if is_superadmin:
-                        # superadmin must OWN the room
                         if picked.owner_id and picked.owner_id != pro_id:
-                            ws.send(
-                                json.dumps(
-                                    {"type": "error", "error": "forbidden_chatroom"}
-                                )
-                            )
+                            ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
+                            last_activity["ts"] = time.time()
                             return
-                        # legacy fallback
                         if (
                             not picked.owner_id
                             and picked.super_admin_id
                             and picked.super_admin_id != pro_id
                         ):
-                            ws.send(
-                                json.dumps(
-                                    {"type": "error", "error": "forbidden_chatroom"}
-                                )
-                            )
+                            ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
+                            last_activity["ts"] = time.time()
                             return
                     else:
-
-                        # admin → must match admin_id
                         if is_admin:
                             if picked.admin_id and picked.admin_id != pro_id:
-                                ws.send(
-                                    json.dumps(
-                                        {"type": "error", "error": "forbidden_chatroom"}
-                                    )
-                                )
+                                ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
+                                last_activity["ts"] = time.time()
                                 return
-                        # master → must match super_admin_id (master)
                         elif is_master:
                             if picked.super_admin_id and picked.super_admin_id != pro_id:
-                                ws.send(
-                                    json.dumps(
-                                        {"type": "error", "error": "forbidden_chatroom"}
-                                    )
-                                )
+                                ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
+                                last_activity["ts"] = time.time()
                                 return
                         else:
-                            # some other staff type: deny by default
-                            ws.send(
-                                json.dumps(
-                                    {"type": "error", "error": "forbidden_chatroom"}
-                                )
-                            )
+                            ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
+                            last_activity["ts"] = time.time()
                             return
 
                     chat = picked
                     chat_id = str(chat.id)
+
+                    # ✅ Ensure engaged state exists; default False
+                    STAFF_ENGAGED.setdefault(chat_id, False)
+
                     room_add(chat_id, ws)
                     mark_role_join(chat, conn_role, ws)
-                    ws.send(
-                        json.dumps(
-                            {"type": "joined", "chat_id": chat_id, "role": conn_role}
-                        )
-                    )
+                    ws.send(json.dumps({"type": "joined", "chat_id": chat_id, "role": conn_role}))
+                    last_activity["ts"] = time.time()
 
                 # --- open (or create) by child_user_id ---
                 elif qs_child_user_id:
                     chat = ensure_chatroom_for_pro(_oid(qs_child_user_id))
                     if is_superadmin:
                         if chat.owner_id and chat.owner_id != pro_id:
-                            ws.send(
-                                json.dumps(
-                                    {"type": "error", "error": "forbidden_child_room"}
-                                )
-                            )
+                            ws.send(json.dumps({"type": "error", "error": "forbidden_child_room"}))
+                            last_activity["ts"] = time.time()
                             return
                         if (
                             not chat.owner_id
                             and chat.super_admin_id
                             and chat.super_admin_id != pro_id
                         ):
-                            ws.send(
-                                json.dumps(
-                                    {"type": "error", "error": "forbidden_child_room"}
-                                )
-                            )
+                            ws.send(json.dumps({"type": "error", "error": "forbidden_child_room"}))
+                            last_activity["ts"] = time.time()
                             return
                     else:
                         if is_admin:
                             if chat.admin_id and chat.admin_id != pro_id:
-                                ws.send(
-                                    json.dumps(
-                                        {"type": "error", "error": "forbidden_child_room"}
-                                    )
-                                )
+                                ws.send(json.dumps({"type": "error", "error": "forbidden_child_room"}))
+                                last_activity["ts"] = time.time()
                                 return
                         elif is_master:
                             if chat.super_admin_id and chat.super_admin_id != pro_id:
-                                ws.send(
-                                    json.dumps(
-                                        {"type": "error", "error": "forbidden_child_room"}
-                                    )
-                                )
+                                ws.send(json.dumps({"type": "error", "error": "forbidden_child_room"}))
+                                last_activity["ts"] = time.time()
                                 return
                         else:
-                            ws.send(
-                                json.dumps(
-                                    {"type": "error", "error": "forbidden_child_room"}
-                                )
-                            )
+                            ws.send(json.dumps({"type": "error", "error": "forbidden_child_room"}))
+                            last_activity["ts"] = time.time()
                             return
 
                     chat_id = str(chat.id)
+
+                    # ✅ Ensure engaged state exists; default False
+                    STAFF_ENGAGED.setdefault(chat_id, False)
+
                     room_add(chat_id, ws)
                     mark_role_join(chat, conn_role, ws)
-                    ws.send(
-                        json.dumps(
-                            {"type": "joined", "chat_id": chat_id, "role": conn_role}
-                        )
-                    )
+                    ws.send(json.dumps({"type": "joined", "chat_id": chat_id, "role": conn_role}))
+                    last_activity["ts"] = time.time()
 
                 # --- list rooms for selection (no params) ---
                 else:
-
                     def _as_oid(v):
                         try:
                             return v if isinstance(v, ObjectId) else ObjectId(str(v))
@@ -736,35 +735,30 @@ def create_app() -> Flask:
                     )
 
                     if is_superadmin:
-                        # superadmin → by owner_id
                         rooms = (
                             Chatroom.objects(owner_id=pro_id)
                             .only(*base_fields)
                             .order_by("-updated_time")
                         )
-                        # legacy fallback
                         if rooms.count() == 0:
                             rooms = (
                                 Chatroom.objects(super_admin_id=pro_id)
-                                    .only(*base_fields)
-                                    .order_by("-updated_time")
+                                .only(*base_fields)
+                                .order_by("-updated_time")
                             )
                     elif is_admin:
-                        # admin → by admin_id
                         rooms = (
                             Chatroom.objects(admin_id=pro_id)
                             .only(*base_fields)
                             .order_by("-updated_time")
                         )
                     elif is_master:
-                        # master → by super_admin_id (master)
                         rooms = (
                             Chatroom.objects(super_admin_id=pro_id)
                             .only(*base_fields)
                             .order_by("-updated_time")
                         )
                     else:
-                        # other staff: no rooms
                         rooms = Chatroom.objects(id=None)
 
                     rooms_list = list(rooms)
@@ -779,22 +773,13 @@ def create_app() -> Flask:
                     if user_oid_list:
                         cursor = support_users_coll.find(
                             {"user_id": {"$in": user_oid_list}},
-                            {
-                                "_id": 0,
-                                "user_id": 1,
-                                "name": 1,
-                                "userName": 1,
-                                "user_name": 1,
-                                "phone": 1,
-                            },
+                            {"_id": 0, "user_id": 1, "name": 1, "userName": 1, "user_name": 1, "phone": 1},
                         )
                         for doc in cursor:
                             key = str(doc.get("user_id"))
                             meta_by_userid[key] = {
                                 "name": doc.get("name") or "",
-                                "userName": (
-                                    doc.get("userName") or doc.get("user_name") or ""
-                                ),
+                                "userName": (doc.get("userName") or doc.get("user_name") or ""),
                                 "phone": doc.get("phone") or "",
                             }
 
@@ -812,107 +797,80 @@ def create_app() -> Flask:
                             {
                                 "chat_id": str(r.id),
                                 "user_id": str(r.user_id) if r.user_id else None,
-                                "is_user_active": bool(
-                                    getattr(r, "is_user_active", False)
-                                ),
-                                "is_superadmin_active": bool(
-                                    getattr(r, "is_superadmin_active", False)
-                                ),
-                                "is_owner_active": bool(
-                                    getattr(r, "is_owner_active", False)
-                                ),
-                                "is_admin_active": bool(
-                                    getattr(r, "is_admin_active", False)
-                                ),
-                                "updated_time": _iso(
-                                    getattr(r, "updated_time", None)
-                                    or getattr(r, "created_time", None)
-                                ),
-                                "user": meta_by_userid.get(
-                                    str(getattr(r, "user_id", "")),
-                                    {"name": "", "userName": "", "phone": ""},
-                                ),
+                                "is_user_active": bool(getattr(r, "is_user_active", False)),
+                                "is_superadmin_active": bool(getattr(r, "is_superadmin_active", False)),
+                                "is_owner_active": bool(getattr(r, "is_owner_active", False)),
+                                "is_admin_active": bool(getattr(r, "is_admin_active", False)),
+                                "updated_time": _iso(getattr(r, "updated_time", None) or getattr(r, "created_time", None)),
+                                "user": meta_by_userid.get(str(getattr(r, "user_id", "")), {"name": "", "userName": "", "phone": ""}),
                             }
                             for r in rooms_list
                         ],
                     }
                     ws.send(json.dumps(payload))
+                    last_activity["ts"] = time.time()
 
             # ── main WS loop ───────────────────────────────────────────────
             while True:
-                raw = ws.receive()
+                raw = ws.receive()  # (blocking)
                 if raw is None:
                     break
+
+                last_activity["ts"] = time.time()  # ✅ touch on any inbound
+
                 try:
                     data = json.loads(raw)
                 except Exception:
                     ws.send(json.dumps({"type": "error", "error": "invalid_json"}))
+                    last_activity["ts"] = time.time()
                     continue
 
                 t = (data.get("type") or "").lower()
 
                 if t == "ping":
                     ws.send(json.dumps({"type": "pong"}))
+                    last_activity["ts"] = time.time()
                     continue
 
                 if t == "select_chatroom" and bucket_role != "user":
                     target_id = data.get("chat_id")
                     if not target_id:
-                        ws.send(
-                            json.dumps({"type": "error", "error": "chat_id_required"})
-                        )
+                        ws.send(json.dumps({"type": "error", "error": "chat_id_required"}))
+                        last_activity["ts"] = time.time()
                         continue
                     picked = Chatroom.objects(id=_oid(target_id)).first()
                     if not picked:
-                        ws.send(
-                            json.dumps({"type": "error", "error": "chatroom_not_found"})
-                        )
+                        ws.send(json.dumps({"type": "error", "error": "chatroom_not_found"}))
+                        last_activity["ts"] = time.time()
                         continue
 
                     if is_superadmin:
                         if picked.owner_id and picked.owner_id != pro_id:
-                            ws.send(
-                                json.dumps(
-                                    {"type": "error", "error": "forbidden_chatroom"}
-                                )
-                            )
+                            ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
+                            last_activity["ts"] = time.time()
                             return
                         if (
                             not picked.owner_id
                             and picked.super_admin_id
                             and picked.super_admin_id != pro_id
                         ):
-                            ws.send(
-                                json.dumps(
-                                    {"type": "error", "error": "forbidden_chatroom"}
-                                )
-                            )
+                            ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
+                            last_activity["ts"] = time.time()
                             return
                     else:
                         if is_admin:
                             if picked.admin_id and picked.admin_id != pro_id:
-                                ws.send(
-                                    json.dumps(
-                                        {"type": "error", "error": "forbidden_chatroom"}
-                                    )
-                                )
+                                ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
+                                last_activity["ts"] = time.time()
                                 return
-                        # master → must match super_admin_id (master)
                         elif is_master:
                             if picked.super_admin_id and picked.super_admin_id != pro_id:
-                                ws.send(
-                                    json.dumps(
-                                        {"type": "error", "error": "forbidden_chatroom"}
-                                    )
-                                )
+                                ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
+                                last_activity["ts"] = time.time()
                                 return
                         else:
-                            # some other staff type: deny by default
-                            ws.send(
-                                json.dumps(
-                                    {"type": "error", "error": "forbidden_chatroom"}
-                                )
-                            )
+                            ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
+                            last_activity["ts"] = time.time()
                             return
 
                     if chat and chat_id:
@@ -920,27 +878,46 @@ def create_app() -> Flask:
                             mark_role_leave(chat, conn_role, ws)
                         finally:
                             room_remove(chat_id, ws)
+
                     chat = picked
                     chat_id = str(chat.id)
+
+                    # ✅ Ensure engaged state exists; default False
+                    STAFF_ENGAGED.setdefault(chat_id, False)
+
                     room_add(chat_id, ws)
                     mark_role_join(chat, conn_role, ws)
-                    ws.send(
-                        json.dumps(
-                            {"type": "selected", "chat_id": chat_id, "role": conn_role}
-                        )
-                    )
+                    ws.send(json.dumps({"type": "selected", "chat_id": chat_id, "role": conn_role}))
+                    last_activity["ts"] = time.time()
                     continue
 
                 if t == "message":
                     if not chat or not chat_id:
-                        ws.send(
-                            json.dumps({"type": "error", "error": "no_chat_selected"})
-                        )
+                        ws.send(json.dumps({"type": "error", "error": "no_chat_selected"}))
+                        last_activity["ts"] = time.time()
                         continue
+
                     text = (data.get("text") or "").strip()
                     if not text:
                         ws.send(json.dumps({"type": "error", "error": "empty_message"}))
+                        last_activity["ts"] = time.time()
                         continue
+
+                    # ✅ DAILY LIMIT (ONLY FOR USER) - assumes you already have _can_ask_and_inc + WS_DAILY_USER_LIMIT defined
+                    if bucket_role == "user":
+                        user_id_str = str(getattr(su, "user_id", "") or getattr(su, "id", "") or "")
+                        if not _can_ask_and_inc(user_id_str):
+                            ws.send(
+                                json.dumps(
+                                    {
+                                        "type": "error",
+                                        "error": "limit_reached",
+                                        "message": f"Daily limit reached ({WS_DAILY_USER_LIMIT}/day). Please try tomorrow.",
+                                    }
+                                )
+                            )
+                            last_activity["ts"] = time.time()
+                            continue
 
                     is_first_msg = Message.objects(chatroom_id=chat.id).first() is None
 
@@ -976,15 +953,23 @@ def create_app() -> Flask:
                         },
                     )
 
-                    if bucket_role == "user" and not is_superadmin_present(chat_id):
-                        reply = cache_get(text) or faq_reply(text)
-                        if reply:
-                            cache_set(text, reply)
+                    # ✅ YOUR BOT/STAFF LOGIC (unchanged)
+                    if bucket_role != "user":
+                        STAFF_ENGAGED[chat_id] = True
+                        cancel_pending_bot_reply(chat_id)
+                        continue
+
+                    engaged = bool(STAFF_ENGAGED.get(chat_id, False))
+                    staff_present = is_any_staff_present(chat_id)
+
+                    if not engaged:
+                        reply_lines = generate_bot_reply_lines(text)
+                        if reply_lines:
                             bot = ensure_bot_user()
                             m_bot = Message(
                                 chatroom_id=chat.id,
                                 message_by=bot.id,
-                                message="\n".join(reply),
+                                message="\n".join(reply_lines),
                                 is_file=False,
                                 path=None,
                                 is_bot=True,
@@ -994,24 +979,25 @@ def create_app() -> Flask:
                                 {
                                     "type": "message",
                                     "from": "bot",
-                                    "message": "\n".join(reply),
+                                    "message": "\n".join(reply_lines),
                                     "message_id": str(m_bot.id),
                                     "chat_id": chat_id,
                                     "created_time": m_bot.created_time.isoformat(),
                                 },
                             )
-                            continue
+                        continue
 
-                        ai = llm_fallback(text)
-                        reply = [
-                            ln.strip() for ln in (ai or "").split("\n") if ln.strip()
-                        ]
-                        cache_set(text, reply)
+                    if engaged and staff_present:
+                        schedule_bot_reply_after_2m(chat, chat_id, text)
+                        continue
+
+                    reply_lines = generate_bot_reply_lines(text)
+                    if reply_lines:
                         bot = ensure_bot_user()
                         m_bot = Message(
                             chatroom_id=chat.id,
                             message_by=bot.id,
-                            message="\n".join(reply),
+                            message="\n".join(reply_lines),
                             is_file=False,
                             path=None,
                             is_bot=True,
@@ -1021,7 +1007,7 @@ def create_app() -> Flask:
                             {
                                 "type": "message",
                                 "from": "bot",
-                                "message": "\n".join(reply),
+                                "message": "\n".join(reply_lines),
                                 "message_id": str(m_bot.id),
                                 "chat_id": chat_id,
                                 "created_time": m_bot.created_time.isoformat(),
@@ -1030,6 +1016,7 @@ def create_app() -> Flask:
                     continue
 
                 ws.send(json.dumps({"type": "error", "error": "unknown"}))
+                last_activity["ts"] = time.time()
 
         except Exception as e:
             try:
@@ -1037,11 +1024,14 @@ def create_app() -> Flask:
             except Exception:
                 pass
         finally:
+            stop_watchdog.set()  # ✅ stop watchdog thread
+
             if chat and chat_id:
                 try:
                     mark_role_leave(chat, conn_role, ws)
                 finally:
                     room_remove(chat_id, ws)
+                    cancel_pending_bot_reply(chat_id)
 
     # ─────────────────────────────────────────────────────────
     # NEW: Demo WebSocket (IP-keyed visitor rooms)
@@ -1754,7 +1744,7 @@ if __name__ == "__main__":
         except Exception as e:
             logger.exception(f"✖ Daily backup crashed: {e}")
 
-    schedule.every().day.at("00:00").do(
+    schedule.every().day.at("15:33").do(
         lambda: _run_async(_daily_backup_job, "backup-03")
     )
 
@@ -1767,30 +1757,18 @@ if __name__ == "__main__":
                 bucket=None,
                 s3_prefix="mongo_backup",
             )
+
             if res_up.get("ok"):
                 logger.info(
                     f"✔ Daily upload done → s3://{res_up['bucket']}/{res_up['key']}"
                 )
-
-                # Now, download the backup from S3
-                res_down = download_backup_from_s3(
-                    date_str=None,
-                    out_root="backups",
-                    bucket=res_up['bucket'],
-                    s3_prefix="mongo_backup",
-                )
-                if res_down.get("ok"):
-                    logger.info(
-                        f"✔ Backup downloaded successfully from S3 → {res_down['downloaded_to']}"
-                    )
-                else:
-                    logger.error(f"✖ Backup download failed → {res_down.get('error')}")
             else:
                 logger.error(f"✖ Daily upload failed → {res_up.get('error')}")
+
         except Exception as e:
             logger.exception(f"✖ Daily upload crashed: {e}")
 
-    schedule.every().day.at("00:20").do(
+    schedule.every().day.at("15:36").do(
         lambda: _run_async(_daily_upload_job, "upload-04")
     )
 
@@ -1813,7 +1791,7 @@ if __name__ == "__main__":
         except Exception as e:
             logger.exception(f"✖ Daily cleanup crashed: {e}")
 
-    schedule.every().day.at("00:30").do(
+    schedule.every().day.at("15:38").do(
         lambda: _run_async(_daily_cleanup_job, "cleanup-05")
     )
 

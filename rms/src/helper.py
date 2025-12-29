@@ -8,9 +8,11 @@ import time
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from threading import Lock
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 from dotenv import load_dotenv
 import jwt
+from threading import Lock, Timer
+from zoneinfo import ZoneInfo
 import requests
 from bson import ObjectId
 from flask import request
@@ -32,6 +34,16 @@ from src.faq_router import answer_from_faq, load_faqs
 from src.models import Chatroom, Message, ProUser, SCUser
 
 load_dotenv()
+
+PENDING_LOCK = Lock()
+PENDING_BOT_TIMERS: dict[str, Timer] = {}
+PENDING_USER_TEXT: dict[str, str] = {}   # optional: keep last user question
+STAFF_ENGAGED: dict[str, bool] = {}
+PING_INTERVAL_SECONDS = 300          # 5 min
+BOT_REPLY_DELAY_SECONDS = 120
+WS_IDLE_TIMEOUT_SECONDS = int(os.getenv("WS_IDLE_TIMEOUT_SECONDS", "300"))   # 5 min default
+WS_DAILY_USER_LIMIT     = int(os.getenv("WS_DAILY_USER_LIMIT", "20"))       # 20 default
+_DAILY_QA_COUNTS = {}
 # ────────────────────── ObjectId / JWT helpers ──────────────────────
 def _oid(v) -> Optional[ObjectId]:
     if not v:
@@ -769,9 +781,9 @@ def mark_role_leave(chat: Chatroom, role: str, ws):
         roles_dict = PRESENCE[chat_id].setdefault(
             "_roles",
             {
-                "master": set(),
-                "admin": set(),
-                "superadmin": set(),
+                "master": set(),      # super_admin_id
+                "admin": set(),       # admin_id
+                "superadmin": set(),  # owner_id
             },
         )
 
@@ -783,11 +795,16 @@ def mark_role_leave(chat: Chatroom, role: str, ws):
                 role_bucket.remove(ws)
             role_became_empty = len(role_bucket) == 0
 
-        # cleanup PRESENCE if absolutely no one is left
-        if (
-            len(PRESENCE[chat_id]["user"]) == 0
-            and len(PRESENCE[chat_id]["superadmin"]) == 0
-        ):
+        # ✅ cleanup PRESENCE only if nobody is left (user bucket empty AND staff bucket empty AND no staff roles)
+        user_empty = len(PRESENCE[chat_id].get("user", set())) == 0
+        staff_bucket_empty = len(PRESENCE[chat_id].get("superadmin", set())) == 0  # your staff bucket name
+        no_staff_roles = (
+            len(roles_dict.get("master", set())) == 0
+            and len(roles_dict.get("admin", set())) == 0
+            and len(roles_dict.get("superadmin", set())) == 0
+        )
+
+        if user_empty and staff_bucket_empty and no_staff_roles:
             PRESENCE.pop(chat_id, None)
 
     now = datetime.now(timezone.utc)
@@ -815,12 +832,17 @@ def mark_role_leave(chat: Chatroom, role: str, ws):
                 set__updated_time=now,
             )
 
-        # last SUPERADMIN left → is_owner_active = False
+        # last SUPERADMIN (owner) left → is_owner_active = False
         elif role_key == "superadmin":
             Chatroom.objects(id=chat.id, is_owner_active__ne=False).update_one(
                 set__is_owner_active=False,
                 set__updated_time=now,
             )
+
+    # ✅ if no staff is present anymore, reset “staff engaged” and cancel pending bot reply timer
+    if not is_any_staff_present(chat_id):
+        STAFF_ENGAGED[chat_id] = False
+        cancel_pending_bot_reply(chat_id)
 
 
 # === NEW: quick presence check ===
@@ -1201,7 +1223,7 @@ def demo_mark_role_leave(chat_id: str, role: str, ws):
     if remove_all:
         with DEMO_PRES_LOCK:
             DEMO_PRESENCE.pop(chat_id, None)
-
+    
 
 def is_demo_superadmin_present(chat_id: str) -> bool:
     """
@@ -1269,7 +1291,107 @@ def safe_broadcast(chat_id, payload):
     except Exception as e:
         print("[WS] broadcast error:", repr(e))
 
+def is_any_staff_present(chat_id: str) -> bool:
+    _ensure_presence_bucket(chat_id)
+    roles = PRESENCE.get(chat_id, {}).get("_roles", {})
 
+    # staff roles in your system:
+    # master      -> super_admin_id
+    # admin       -> admin_id
+    # superadmin  -> owner_id
+    return (
+        len(roles.get("master", set())) > 0
+        or len(roles.get("admin", set())) > 0
+        or len(roles.get("superadmin", set())) > 0
+    )
+
+def cancel_pending_bot_reply(chat_id: str):
+    with PENDING_LOCK:
+        t = PENDING_BOT_TIMERS.pop(chat_id, None)
+        PENDING_USER_TEXT.pop(chat_id, None)
+        if t:
+            try:
+                t.cancel()
+            except Exception:
+                pass
+
+def generate_bot_reply_lines(text: str) -> list[str]:
+    reply = cache_get(text) or faq_reply(text)
+    if reply:
+        cache_set(text, reply)
+        return reply
+
+    ai = llm_fallback(text)
+    lines = [ln.strip() for ln in (ai or "").split("\n") if ln.strip()]
+    cache_set(text, lines)
+    return lines
+
+def schedule_bot_reply_after_2m(chat, chat_id: str, user_text: str):
+    cancel_pending_bot_reply(chat_id)
+
+    def _fire():
+        # If staff replied or staff left, we decide what to do:
+        # Requirement says: if staff present and no one answered -> bot replies.
+        # If staff left, bot can reply immediately anyway, so we still reply.
+        with PENDING_LOCK:
+            PENDING_BOT_TIMERS.pop(chat_id, None)
+
+        reply_lines = generate_bot_reply_lines(user_text)
+        if not reply_lines:
+            return
+
+        bot = ensure_bot_user()
+        m_bot = Message(
+            chatroom_id=chat.id,
+            message_by=bot.id,
+            message="\n".join(reply_lines),
+            is_file=False,
+            path=None,
+            is_bot=True,
+        ).save()
+
+        room_broadcast(
+            chat_id,
+            {
+                "type": "message",
+                "from": "bot",
+                "message": "\n".join(reply_lines),
+                "message_id": str(m_bot.id),
+                "chat_id": chat_id,
+                "created_time": m_bot.created_time.isoformat(),
+            },
+        )
+
+    with PENDING_LOCK:
+        PENDING_USER_TEXT[chat_id] = user_text
+        t = Timer(120.0, _fire)
+        PENDING_BOT_TIMERS[chat_id] = t
+        t.daemon = True
+        t.start()
+
+def _utc_day_key() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+def _can_ask_and_inc(user_id_str: str) -> bool:
+    """
+    Count ONLY user messages (bucket_role == 'user').
+    Returns True if allowed, False if limit reached.
+    """
+    day = _utc_day_key()
+    bucket = _DAILY_QA_COUNTS.setdefault(day, {})
+
+    cur = int(bucket.get(user_id_str, 0))
+    if cur >= WS_DAILY_USER_LIMIT:
+        return False
+
+    bucket[user_id_str] = cur + 1
+
+    # optional cleanup: keep only today
+    for k in list(_DAILY_QA_COUNTS.keys()):
+        if k != day:
+            _DAILY_QA_COUNTS.pop(k, None)
+
+    return True
 # ────────────────────── Exported symbols ──────────────────────
 __all__ = [
     "_oid",
@@ -1305,4 +1427,11 @@ __all__ = [
     "safe_room_add",
     "safe_room_remove",
     "safe_broadcast",
+    "is_any_staff_present",
+    "cancel_pending_bot_reply",
+    "generate_bot_reply_lines",
+    "schedule_bot_reply_after_2m",
+    "_utc_day_key",
+    "_can_ask_and_inc"
+    
 ]

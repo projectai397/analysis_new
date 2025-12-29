@@ -1,1 +1,0 @@
-{"indexes":[{"v":{"$numberInt":"2"},"key":{"_id":{"$numberInt":"1"}},"name":"_id_"}],"uuid":"8a9c6041f09a4299b675700fb051a9e0","collectionName":"settlementJobs","type":"collection"}
