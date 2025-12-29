@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 import csv
+from pathlib import Path
 from io import StringIO
 from difflib import SequenceMatcher
 import threading
@@ -19,6 +20,8 @@ from telegram import Update
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import CallbackQueryHandler
 from telegram.ext import CallbackContext
+from telegram.constants import BotCommandScopeType
+from telegram import BotCommandScopeDefault, BotCommandScopeAllPrivateChats
 from telegram.ext import (
     ApplicationBuilder,
     ConversationHandler,
@@ -64,14 +67,28 @@ USER_SESSION_EXPIRES: Dict[int, float] = {}
 
 SESSION_TIMEOUT_SECONDS = 600 
 
-BOT_TOKENS = [config.TELEGRAM_BOT_TOKEN]
-
 def build_login_payload(login_id: str, password: str) -> dict:
     raw = login_id.strip()
     digits = raw[1:] if raw.startswith("+") else raw
     if digits.isdigit() and 8 <= len(digits) <= 15:
         return {"phone": raw, "password": password}
     return {"username": raw, "password": password}
+
+def load_bots_config(json_path: str) -> list[dict]:
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    if not isinstance(data, list):
+        raise ValueError("bots.json must contain a JSON array of bot objects")
+
+    required = {"token", "name", "logo_path"}
+    for i, item in enumerate(data):
+        if not isinstance(item, dict):
+            raise ValueError(f"bots.json item #{i} must be an object")
+        missing = required - set(item.keys())
+        if missing:
+            raise ValueError(f"bots.json item #{i} missing keys: {sorted(missing)}")
+    return data
 
 def _normalize_oid_str(x) -> str | None:
     """
@@ -276,24 +293,37 @@ async def get_subscription_button(chat_id: int, role: str) -> Tuple[InlineKeyboa
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     clear_session(update, context)
 
-    # login in progress
     context.user_data["is_logging_in"] = True
-
-    # also skip FAQ if user types anything immediately
     mark_skip_faq(context)
 
     chat = update.effective_chat
 
-    # ---- SEND IMAGE + CAPTION ----
-    image_path = os.path.join(os.path.dirname(__file__), "logso.png")
+    # Per-bot config
+    bot_name = context.application.bot_data.get("bot_name", "Bot")
+    logo_path = context.application.bot_data.get("logo_path")
 
-    if os.path.exists(image_path):
+    # ✅ Resolve logo path relative to THIS file's folder: src/telegram/
+    resolved_logo_path = None
+    if logo_path:
+        p = Path(logo_path)
+        if p.is_absolute():
+            resolved_logo_path = p
+        else:
+            resolved_logo_path = Path(__file__).resolve().parent / p
+
+    # ---- SEND IMAGE + CAPTION ----
+    if resolved_logo_path and resolved_logo_path.exists():
         try:
-            with open(image_path, "rb") as f:
-                msg = await chat.send_photo(photo=f, caption="🎯 Welcome to Bot")
+            with resolved_logo_path.open("rb") as f:
+                msg = await chat.send_photo(
+                    photo=f,
+                    caption=f"🎯 Welcome to {html.escape(str(bot_name))}"
+                )
                 remember_bot_message_from_message(update, msg)
         except Exception as e:
-            logger.warning(f"Logo image send failed: {e}")
+            logger.warning(f"Logo image send failed for {bot_name}: {e}")
+    else:
+        logger.warning(f"Logo path missing/not found for {bot_name}: {logo_path}")
 
     keyboard = InlineKeyboardMarkup([[TRADING_BUTTON]])
     start_btn_msg = await chat.send_message(
@@ -312,7 +342,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["login_prompt_msg_id"] = msg.message_id
     start_session_timer(update, context)
     return ASK_USERNAME
-
 
 async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     login_id = (update.message.text or "").strip()
@@ -1187,12 +1216,11 @@ async def handle_free_text_faq(update: Update, context: ContextTypes.DEFAULT_TYP
 # ============================================================
 
 
-def _set_bot_commands(app):
-    """
-    Set slash commands so /alerts also appears in the UI.
-    """
+async def _set_bot_commands(app):
+    bot_name = app.bot_data.get("bot_name", "Bot")
+
     commands = [
-        BotCommand("start", "Login to RMS bot"),
+        BotCommand("start", f"Login to {bot_name} bot"),
         BotCommand("users", "View/manage users"),
         BotCommand("position", "View positions summary"),
         BotCommand("trades", "View trades summary"),
@@ -1201,17 +1229,21 @@ def _set_bot_commands(app):
         BotCommand("me", "Who am I / role info"),
         BotCommand("cancel", "Cancel current operation"),
     ]
-    app.bot.set_my_commands(commands)
 
+    await app.bot.delete_my_commands(scope=BotCommandScopeDefault())
+    await app.bot.delete_my_commands(scope=BotCommandScopeAllPrivateChats())
 
-def build_application(token: str):
+    await app.bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+    await app.bot.set_my_commands(commands, scope=BotCommandScopeAllPrivateChats())
+def build_application(token: str, bot_name: str, logo_path: str):
     """
     Initializes the bot application and registers various handlers.
     Fixed to pass the 'app' instance to the trade listener to avoid global errors.
     """
     # 1. Create the bot application
-    app = ApplicationBuilder().token(token).post_init(_set_bot_commands).build()
-
+    app = ApplicationBuilder().token(token).build()
+    app.bot_data["bot_name"] = bot_name
+    app.bot_data["logo_path"] = logo_path
     # 2. Register authentication handlers (Login flow)
     register_auth_handlers(app)
 
@@ -1242,14 +1274,17 @@ def build_application(token: str):
     return app
 
 
-async def start_bot(token):
-    # 🚨 CHANGE THIS: Call build_application instead of creating a bare app
-    app = build_application(token) 
-    
+async def start_bot(token: str, bot_name: str, logo_path: str):
+    app = build_application(token, bot_name, logo_path)
+
     await app.initialize()
+
+    # ✅ Explicitly set commands (no post_init)
+    await _set_bot_commands(app)
+
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
-    
+
     try:
         while True:
             await asyncio.sleep(3600)
@@ -1257,32 +1292,36 @@ async def start_bot(token):
         await app.stop()
         await app.shutdown()
 
-def run_bot_instance(token: str):
+def run_bot_instance(token: str, bot_name: str, logo_path: str):
     try:
-        logger.info(f"🚀 Starting bot with token: {token}")
-        
-        # Create and set a new loop for this specific thread
+        logger.info(f"🚀 Starting bot: {bot_name}")
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
-        # Run the async start_bot function
-        loop.run_until_complete(start_bot(token))
+
+        loop.run_until_complete(start_bot(token, bot_name, logo_path))
     except Exception as e:
-        logger.exception(f"Bot with token {token} crashed: {e}")
+        logger.exception(f"Bot '{bot_name}' crashed: {e}")
 
 def run_multiple_bots():
-    """
-    Function to run multiple bot instances concurrently by starting each in a separate thread.
-    """
     threads = []
-    
-    for token in BOT_TOKENS:
-        # Create a new thread for each bot instance
-        thread = threading.Thread(target=run_bot_instance, args=(token,))
+
+    json_path = Path(__file__).resolve().parent / "bots.json"
+    bots = load_bots_config(str(json_path))
+
+    for b in bots:
+        token = b["token"]
+        bot_name = b["name"]
+        logo_path = b["logo_path"]
+
+        thread = threading.Thread(
+            target=run_bot_instance,
+            args=(token, bot_name, logo_path),
+            daemon=True
+        )
         threads.append(thread)
         thread.start()
 
-    # Wait for all threads to finish
     for thread in threads:
         thread.join()
 
