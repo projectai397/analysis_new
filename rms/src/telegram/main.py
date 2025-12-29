@@ -5,6 +5,7 @@ import csv
 from pathlib import Path
 from io import StringIO
 from difflib import SequenceMatcher
+from zoneinfo import ZoneInfo
 import threading
 from typing import Dict, Any, List, Tuple
 import logging
@@ -177,14 +178,6 @@ async def require_login_from_query(query, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
     )
 
-
-# def role_name_from_user(user: dict) -> str:
-#     if not user:
-#         return ""
-#     rn = user.get("role_name") or user.get("role") or ""
-#     return str(rn).lower()
-
-
 def display_name(u: Dict[str, Any]) -> str:
     return (
         u.get("userName")
@@ -193,6 +186,63 @@ def display_name(u: Dict[str, Any]) -> str:
         or str(u.get("phone") or "Unknown")
     )
 
+IST = ZoneInfo("Asia/Kolkata")
+
+# key -> {"date": "YYYY-MM-DD", "count": int}
+FAQ_DAILY_USAGE: dict[str, dict] = {}
+
+def _today_ist_str() -> str:
+    return datetime.now(IST).date().isoformat()
+
+def _get_daily_limit() -> int:
+    # default 20 if not set
+    try:
+        return int(os.getenv("FAQ_DAILY_LIMIT", "20"))
+    except Exception:
+        return 20
+
+def _get_daily_limit_message() -> str:
+    return os.getenv(
+        "FAQ_DAILY_LIMIT_MESSAGE",
+        "⚠️ Daily limit reached for today. Please try again tomorrow."
+    )
+
+def _faq_user_key(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """
+    Prefer Mongo user id if logged in; else fall back to Telegram user id.
+    """
+    token, user = get_logged_in(update, context)
+    if user:
+        uid = user.get("id") or user.get("_id")
+        if uid:
+            return f"mongo:{str(uid)}"
+    tg_id = update.effective_user.id if update.effective_user else "unknown"
+    return f"tg:{tg_id}"
+
+def check_and_increment_daily_faq_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> tuple[bool, int, int]:
+    """
+    Returns: (allowed, used, limit)
+    If allowed=True, this function increments usage.
+    """
+    limit = _get_daily_limit()
+    if limit <= 0:
+        # treat <=0 as unlimited
+        return True, 0, limit
+
+    key = _faq_user_key(update, context)
+    today = _today_ist_str()
+
+    entry = FAQ_DAILY_USAGE.get(key)
+    if not entry or entry.get("date") != today:
+        entry = {"date": today, "count": 0}
+        FAQ_DAILY_USAGE[key] = entry
+
+    used = int(entry.get("count", 0))
+    if used >= limit:
+        return False, used, limit
+
+    entry["count"] = used + 1
+    return True, used + 1, limit
 
 def build_all_accessible_users(user: dict) -> List[Dict[str, Any]]:
     rn = role_name_from_user(user)
@@ -1157,11 +1207,9 @@ async def handle_free_text_faq(update: Update, context: ContextTypes.DEFAULT_TYP
     if not update.message or not update.message.text:
         return
 
-    # Ignore inline-mode inserted messages (shows "via @Bot")
     if update.message.via_bot is not None:
         return
 
-    # Skip FAQ if a previous flow (login) asked us to skip
     if context.user_data.pop("skip_next_faq", False):
         return
 
@@ -1169,19 +1217,22 @@ async def handle_free_text_faq(update: Update, context: ContextTypes.DEFAULT_TYP
     if not text:
         return
 
-    # Ignore during login conversation
     if context.user_data.get("is_logging_in"):
         return
 
-    # Only treat user messages (non-command) as questions: you already enforce this by handler filter
-    # MessageHandler(filters.TEXT & ~filters.COMMAND, ...)
+    # ✅ DAILY LIMIT CHECK (before sheet/ollama)
+    allowed, used, limit = check_and_increment_daily_faq_limit(update, context)
+    if not allowed:
+        msg = await update.message.reply_text(_get_daily_limit_message())
+        remember_bot_message_from_message(update, msg)
+        return
 
+    # existing logic continues...
     faqs = await get_cached_faqs()
     match, score = find_best_faq_match(text, faqs)
 
     threshold = int(getattr(config, "FAQ_MATCH_THRESHOLD", 80))
     if not match or score < threshold:
-        # 1) reply fallback to the SAME user
         msg = await update.message.reply_text(
             "Sorry for that, I'm not able to provide such data. "
             "You can ask anything related to our trading platform. "
@@ -1189,13 +1240,9 @@ async def handle_free_text_faq(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         remember_bot_message_from_message(update, msg)
 
-        # 2) escalate to parent based on hierarchy (only if logged-in)
         token, user = get_logged_in(update, context)
-        logger.info(f"[FAQ] fallback triggered. token={bool(token)} user_id={user.get('id') if user else None}")
         if token and user:
             rn = role_name_from_user(user)
-            logger.info(f"[FAQ] escalation check role={rn} parentId={user.get('parentId')}")
-            # only master/admin should escalate; superadmin has no parent
             if rn in ("master", "admin"):
                 await notify_parent_on_unanswered_faq(
                     update,
@@ -1203,8 +1250,6 @@ async def handle_free_text_faq(update: Update, context: ContextTypes.DEFAULT_TYP
                     question_text=text,
                     asked_by_user=user,
                 )
-            else:
-                logger.info(f"[FAQ] no escalation for role={rn}")
         return
 
     summarized = await summarize_with_ollama_phi(match["a"])
