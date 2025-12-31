@@ -1740,7 +1740,7 @@ if __name__ == "__main__":
         except Exception as e:
             logger.exception(f"✖ Daily backup crashed: {e}")
 
-    schedule.every().day.at("10:55").do(
+    schedule.every().day.at("10:56").do(
         lambda: _run_async(_daily_backup_job, "backup-03")
     )
 
