@@ -415,79 +415,86 @@ def query_user_db(user_msg: str, user_id: str):
         logger.error(f" [1.7] DB_CHECK_ERROR: {e}")
         return None
     
-def format_db_results(data_list, collection_name: str, start_date=None, end_date=None) -> list:
+def format_db_results(data_list, collection_name: str, start_date=None, end_date=None) -> str:
     # 1. Handle Empty or Count Results
     if not data_list:
-        return [{"message": "No records found for the selected period."}]
+        return "<p>No records found for the selected period.</p>"
     
     if isinstance(data_list, int):
-        return [{"total_count": data_list}]
+        return f"<b>Total count:</b> {data_list}"
 
-    formatted = []
-    
-    # Helper to clean up date objects for readability
+    # Define common styles for the table
+    t_style = 'style="width:100%; border-collapse: collapse; font-family: sans-serif; font-size: 13px;"'
+    th_style = 'style="background-color: #f8f9fa; border-bottom: 2px solid #dee2e6; padding: 8px; text-align: left;"'
+    td_style = 'style="border-bottom: 1px solid #dee2e6; padding: 8px;"'
+
     def clean_date(dt):
-        return dt.strftime("%Y-%m-%d %H:%M") if hasattr(dt, 'strftime') else dt
+        return dt.strftime("%d %b %H:%M") if hasattr(dt, 'strftime') else dt
 
-    # 2. Map Collection Data
-    for doc in data_list:
-        if collection_name == "position":
-            formatted.append({
-                "symbol": doc.get("symbolName"),
-                "type": doc.get("tradeType"),
-                "quantity": doc.get("totalQuantity"),
-                "price": doc.get("price"),
-                "p&l": doc.get("profitLoss"),
-                "time": clean_date(doc.get("createdAt"))
-            })
-        elif collection_name == "transaction":
-            formatted.append({
-                "amount": doc.get("amount"),
-                "category": doc.get("type"), # 'debit'/'credit'
-                "txn_type": doc.get("transactionType"), # 'brokerage'/'p&l' etc
-                "closing": doc.get("closing"),
-                "time": clean_date(doc.get("createdAt"))
-            })
-        elif collection_name == "user":
-            formatted.append({
-                "name": doc.get("name"),
-                "balance": doc.get("balance"),
-                "margin": doc.get("tradeMarginBalance"),
-                "p&l": doc.get("profitLoss")
-            })
-        elif collection_name == "trade":
-            formatted.append({
-                "symbol": doc.get("symbolName"),
-                "status": doc.get("status"),
-                "order": doc.get("orderType"),
-                "comment": doc.get("comment"),
-                "time": clean_date(doc.get("createdAt"))
-            })
-        elif collection_name == "paymentRequest":
-            status_map = {0: "Pending", 1: "Success/Approved", 2: "Rejected"}
-            formatted.append({
-                "type": doc.get("paymentRequestType"),
-                "amount": doc.get("amount"),
-                "status": status_map.get(doc.get("status"), "Unknown"),
-                "transaction_id": doc.get("transactionId"),
-                "date": clean_date(doc.get("createdAt"))
-            })
-        elif collection_name == "alerts":
-            formatted.append({
-                "alert": doc.get("message"),
-                "level": doc.get("level"),
-                "time": clean_date(doc.get("createdAt"))
-            })
-
-    # 3. Apply Advanced Report Logic (If dates are provided)
+    # 2. Build the Header/Report Info
+    html_out = f"<b>📊 {collection_name.upper()} REPORT</b><br>"
     if start_date and end_date:
-        header = f"### 📊 {collection_name.upper()} REPORT\n"
-        header += f"*Period: {start_date} to {end_date}*\n"
-        header += f"*Total Records Found: {len(formatted)}*\n\n---\n"
-        # Return as a list containing a single string to maintain response consistency
-        return [header + json.dumps(formatted, indent=2)]
+        html_out += f"<small>Period: {start_date} to {end_date}</small><br>"
+    html_out += f"<small>Total Records: {len(data_list)}</small><br><br>"
+    
+    html_out += f'<table {t_style}><thead><tr>'
 
-    return formatted
+    # 3. Collection Specific Table Headers & Rows
+    rows_html = ""
+    
+    if collection_name == "position":
+        html_out += f'<th {th_style}>Symbol</th><th {th_style}>Type</th><th {th_style}>Qty</th><th {th_style}>P&L</th></tr></thead><tbody>'
+        for doc in data_list:
+            pnl = doc.get("profitLoss", 0)
+            pnl_style = 'style="color: green; font-weight: bold;"' if pnl >= 0 else 'style="color: red; font-weight: bold;"'
+            rows_html += f'''<tr>
+                <td {td_style}>{doc.get("symbolName")}</td>
+                <td {td_style}>{doc.get("tradeType")}</td>
+                <td {td_style}>{doc.get("totalQuantity")}</td>
+                <td {td_style} {pnl_style}>{pnl}</td>
+            </tr>'''
+
+    elif collection_name == "trade":
+        html_out += f'<th {th_style}>Symbol</th><th {th_style}>Status</th><th {th_style}>Type</th><th {th_style}>Time</th></tr></thead><tbody>'
+        for doc in data_list:
+            rows_html += f'''<tr>
+                <td {td_style}>{doc.get("symbolName")}</td>
+                <td {td_style}>{doc.get("status")}</td>
+                <td {td_style}>{doc.get("tradeType") or doc.get("orderType")}</td>
+                <td {td_style}>{clean_date(doc.get("createdAt"))}</td>
+            </tr>'''
+
+    elif collection_name == "transaction":
+        html_out += f'<th {th_style}>Amt</th><th {th_style}>Category</th><th {th_style}>Time</th></tr></thead><tbody>'
+        for doc in data_list:
+            amt_style = 'style="color: green;"' if doc.get("type") == "credit" else 'style="color: red;"'
+            rows_html += f'''<tr>
+                <td {td_style} {amt_style}>{doc.get("amount")}</td>
+                <td {td_style}>{doc.get("transactionType")}</td>
+                <td {td_style}>{clean_date(doc.get("createdAt"))}</td>
+            </tr>'''
+
+    elif collection_name == "paymentRequest":
+        status_map = {0: "🕒 Pending", 1: "✅ Approved", 2: "❌ Rejected"}
+        html_out += f'<th {th_style}>Method</th><th {th_style}>Amount</th><th {th_style}>Status</th></tr></thead><tbody>'
+        for doc in data_list:
+            rows_html += f'''<tr>
+                <td {td_style}>{doc.get("paymentRequestType")}</td>
+                <td {td_style}>{doc.get("amount")}</td>
+                <td {td_style}>{status_map.get(doc.get("status"), "Unknown")}</td>
+            </tr>'''
+
+    elif collection_name == "user":
+        html_out += f'<th {th_style}>User</th><th {th_style}>Balance</th><th {th_style}>P&L</th></tr></thead><tbody>'
+        for doc in data_list:
+            rows_html += f'''<tr>
+                <td {td_style}>{doc.get("name")}</td>
+                <td {td_style}>{doc.get("balance")}</td>
+                <td {td_style}>{doc.get("profitLoss")}</td>
+            </tr>'''
+
+    html_out += rows_html + "</tbody></table>"
+    return html_out
 
 def llm_fallback(user_msg: str, user_id: str) -> str:
     logger.info(f"--- Starting LLM Fallback Flow for User: {user_id} ---")
