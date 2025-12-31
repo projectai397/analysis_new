@@ -94,6 +94,7 @@ export type ConversationItem =
       created_at: string
       message_id?: string
       meta?: { domain?: string; reason?: string }
+      status?: "sending" | "sent" | "delivered"
     }
   | {
       kind: "file"
@@ -103,6 +104,7 @@ export type ConversationItem =
       file_type: string
       created_at: string
       message_id?: string
+      status?: "sending" | "sent" | "delivered"
     }
   | {
       kind: "audio"
@@ -112,6 +114,7 @@ export type ConversationItem =
       audio_type: string
       created_at: string
       message_id?: string
+      status?: "sending" | "sent" | "delivered"
     }
 
 export type ChatroomDetail = {
