@@ -963,23 +963,27 @@ def create_app() -> Flask:
                     staff_present = is_any_staff_present(chat_id)
 
                     if not engaged:
-                        reply_lines = generate_bot_reply_lines(text)
+                        # Pass the user_id so the bot can look up trades/balance
+                        user_id_str = str(su.user_id)
+                        reply_lines = generate_bot_reply_lines(text, user_id_str) # <--- Added user_id
+                        
                         if reply_lines:
+                            bot_text = "\n".join(reply_lines) # Now safe because reply_lines is a list
                             bot = ensure_bot_user()
                             m_bot = Message(
                                 chatroom_id=chat.id,
                                 message_by=bot.id,
-                                message="\n".join(reply_lines),
+                                message=bot_text,
                                 is_file=False,
-                                path=None,
                                 is_bot=True,
                             ).save()
+
                             room_broadcast(
                                 chat_id,
                                 {
                                     "type": "message",
                                     "from": "bot",
-                                    "message": "\n".join(reply_lines),
+                                    "message": bot_text,
                                     "message_id": str(m_bot.id),
                                     "chat_id": chat_id,
                                     "created_time": m_bot.created_time.isoformat(),
@@ -1152,11 +1156,8 @@ def create_app() -> Flask:
                     continue
 
                 if t == "message":
-                    # Handling message from user and broadcasting to the parent/admin
                     if not chat_id:
-                        ws.send(
-                            json.dumps({"type": "error", "error": "no_chat_selected"})
-                        )
+                        ws.send(json.dumps({"type": "error", "error": "no_chat_selected"}))
                         continue
 
                     text = (data.get("text") or "").strip()
@@ -1164,50 +1165,45 @@ def create_app() -> Flask:
                         ws.send(json.dumps({"type": "error", "error": "empty_message"}))
                         continue
 
+                    target_account_id = str(su.user_id)
                     sender = "user" if conn_role == "user" else "admin"
+
+                    # Save and Broadcast the original user message
                     msg = save_demo_message(ObjectId(chat_id), sender, text)
+                    room_broadcast(chat_id, {
+                        "type": "message",
+                        "from": sender,
+                        "message": text,
+                        "message_id": str(msg["_id"]),
+                        "chat_id": chat_id,
+                        "created_time": msg["created_time"].isoformat(),
+                    })
 
-                    # Broadcast message to all participants in the chat
-                    room_broadcast(
-                        chat_id,
-                        {
-                            "type": "message",
-                            "from": sender,
-                            "message": text,
-                            "message_id": str(msg["_id"]),
-                            "chat_id": chat_id,
-                            "created_time": msg["created_time"].isoformat(),
-                        },
-                    )
-
-                    # Respond with bot message if it's a user and no admin is present
+                    # BOT RESPONSE
                     if sender == "user" and not is_demo_superadmin_present(chat_id):
-                        reply = cache_get(text) or faq_reply(text)
-                        if not reply:
-                            ai = llm_fallback(text)
-                            reply = (
-                                [ln.strip() for ln in ai.split("\n") if ln.strip()]
-                                if ai
-                                else []
-                            )
-                            cache_set(text, reply)
-                        if reply:
-                            bot_text = "\n".join(reply)
-                            bot_msg = save_demo_message(
-                                ObjectId(chat_id), "bot", bot_text
-                            )
-                            room_broadcast(
-                                chat_id,
-                                {
-                                    "type": "message",
-                                    "from": "bot",
-                                    "message": bot_text,
-                                    "message_id": str(bot_msg["_id"]),
-                                    "chat_id": chat_id,
-                                    "created_time": bot_msg["created_time"].isoformat(),
-                                },
-                            )
-                    continue
+                        # Get the raw response from your brain function
+                        raw_reply = llm_fallback(text, target_account_id)
+
+                        # ✅ 1. Check if raw_reply is a list. If it is, join it with SPACES, not newlines.
+                        if isinstance(raw_reply, list):
+                            bot_text = " ".join(raw_reply)
+                        else:
+                            bot_text = str(raw_reply)
+
+                        # ✅ 2. Clean up any weird double-newlines or trailing spaces
+                        bot_text = bot_text.strip()
+
+                        if bot_text:
+                            bot_msg = save_demo_message(ObjectId(chat_id), "bot", bot_text)
+                            
+                            room_broadcast(chat_id, {
+                                "type": "message",
+                                "from": "bot",
+                                "message": bot_text, # Send the clean string
+                                "message_id": str(bot_msg["_id"]),
+                                "chat_id": chat_id,
+                                "created_time": bot_msg["created_time"].isoformat(),
+                            })
 
                 # Catch unknown message types
                 ws.send(json.dumps({"type": "error", "error": "unknown"}))

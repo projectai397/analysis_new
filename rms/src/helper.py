@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 import requests
 from bson import ObjectId
 from flask import request
+from pymongo import MongoClient
 from jwt import ExpiredSignatureError, InvalidTokenError
 
 try:
@@ -44,6 +45,14 @@ BOT_REPLY_DELAY_SECONDS = 120
 WS_IDLE_TIMEOUT_SECONDS = int(os.getenv("WS_IDLE_TIMEOUT_SECONDS", "300"))   # 5 min default
 WS_DAILY_USER_LIMIT     = int(os.getenv("WS_DAILY_USER_LIMIT", "20"))       # 20 default
 _DAILY_QA_COUNTS = {}
+
+# MongoDB Setup
+MONGO_URI = os.getenv("SOURCE_MONGO_URI")
+DB_NAME = os.getenv("SOURCE_DB_NAME")
+
+# Initialize global DB object
+client = MongoClient(MONGO_URI)
+db = client[DB_NAME]
 # ────────────────────── ObjectId / JWT helpers ──────────────────────
 def _oid(v) -> Optional[ObjectId]:
     if not v:
@@ -254,6 +263,8 @@ def _to_lines(x) -> Optional[list[str]]:
 def _similar(a, b, thr=0.7):
     return SequenceMatcher(None, a, b).ratio() > thr
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("SupportBot")
 # ────────────────────── FAQ + LLM fallback ──────────────────────
 def faq_reply(user_msg: str):
     """
@@ -291,102 +302,242 @@ def faq_reply(user_msg: str):
 
     return None
 
-def llm_fallback(user_msg: str) -> str:
-    """
-    Policy:
-    - Greeting -> short greeting only.
-    - If FAQ exists -> return FAQ answer (no LLM).
-    - If out of domain -> polite refusal.
-    - Else -> LLM answer: simple, generic, medium length (~90–120 words), no AI talk, no platform name.
-    """
+def _call_llm_internal(system_prompt: str, user_msg: str) -> str:
+    # Get base URL and ensure it doesn't have a trailing slash or path
+    base_url = os.getenv("LLM_URL")
+    # Clean the URL to get ONLY the protocol and host:port
+    if "/api/" in base_url:
+        base_url = base_url.split("/api/")[0]
+    
+    endpoint = f"{base_url.rstrip('/')}/api/chat"
 
-    # 0) Greetings
+    payload = {
+        "model": "mistral:latest",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_msg},
+        ],
+        "stream": False,
+        "options": {"temperature": 0.1}
+    }
+
+    try:
+        r = requests.post(endpoint, json=payload, timeout=60)
+        r.raise_for_status()
+        return r.json().get("message", {}).get("content", "").strip()
+    except Exception as e:
+        logger.error(f"LLM Connection Error: {e}")
+        return ""
+    
+from datetime import datetime, time as datetime_time # Import alias to avoid conflict
+
+def query_user_db(user_msg: str, user_id: str):
+    logger.info(f" [1] DB_CHECK: Starting for user: {user_id}")
+    msg = user_msg.lower()
+    coll_name = None
+    
+    # --- 1. DATE RANGE DETECTION ---
+    date_pattern = r'(\d{1,2}[/-]\d{1,2}[/-]\d{4})'
+    found_dates = re.findall(date_pattern, user_msg)
+    
+    date_filter = None
+    if len(found_dates) >= 2:
+        try:
+            # Convert DD/MM/YYYY to start of day (00:00:00)
+            start_dt = datetime.strptime(found_dates[0].replace('-', '/'), "%d/%m/%Y")
+            
+            # THE FIX: Use datetime_time.max to get end of day (23:59:59)
+            # This ensures trades made on the afternoon of the final day are included
+            end_base = datetime.strptime(found_dates[1].replace('-', '/'), "%d/%m/%Y")
+            end_dt = datetime.combine(end_base, datetime_time.max) 
+            
+            date_filter = {"$gte": start_dt, "$lte": end_dt}
+            logger.info(f" [1.1] DATE_FILTER_MATCH: {start_dt} to {end_dt}")
+        except Exception as e:
+            logger.error(f" [1.2] DATE_PARSE_ERROR: {e}")
+
+    # --- 2. ID DETECTION ---
+    id_pattern = r'[a-zA-Z0-9]{8}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{12}|[a-zA-Z0-9]{20,40}'
+    id_match = re.search(id_pattern, user_msg)
+    found_id = id_match.group() if id_match else None
+
+    # --- 3. INTENT FLAGS ---
+    is_last_query = any(word in msg for word in ["last", "latest", "recent"])
+    is_count_query = any(word in msg for word in ["how many", "count", "total"])
+
+    # --- 4. ROUTING PRIORITY ---
+    if any(word in msg for word in ["p&l", "balance", "profit"]):
+        coll_name = "user"
+    elif found_id or any(word in msg for word in ["payment", "deposit", "withdraw", "request"]):
+        coll_name = "paymentRequest"
+    elif any(word in msg for word in ["position", "holding", "open"]):
+        coll_name = "position"
+    elif any(word in msg for word in ["trade", "order"]):
+        coll_name = "trade"
+    elif any(word in msg for word in ["alert", "notification"]):
+        coll_name = "alerts"
+    else:
+        coll_name = "transaction"
+
+    # --- 5. SECURE DATABASE QUERY ---
+    try:
+        if coll_name == "user":
+            query_filter = {"_id": ObjectId(user_id)}
+        else:
+            query_filter = {"userId": ObjectId(user_id)}
+
+        if found_id:
+            query_filter["$or"] = [
+                {"transactionId": found_id},
+                {"_id": ObjectId(found_id) if len(found_id) == 24 else None}
+            ]
+        
+        if date_filter:
+            # Most of your collections use 'createdAt' for time-based filtering
+            query_filter["createdAt"] = date_filter
+
+        if is_count_query:
+            count = db[coll_name].count_documents(query_filter)
+            return {"data": count, "collection": coll_name, "type": "count"}
+
+        # --- 6. SMART LIMITING ---
+        # Increased limit to 100 for date ranges to show the full period requested
+        if date_filter:
+            limit_val = 100 
+        else:
+            limit_val = 1 if (is_last_query or found_id or coll_name == "user") else 5
+        
+        # We sort by createdAt descending to show newest data first
+        results = list(db[coll_name].find(query_filter).sort("createdAt", -1).limit(limit_val))
+        return {"data": results, "collection": coll_name} if results else None
+
+    except Exception as e:
+        logger.error(f" [1.7] DB_CHECK_ERROR: {e}")
+        return None
+    
+def format_db_results(data_list, collection_name: str, start_date=None, end_date=None) -> list:
+    # 1. Handle Empty or Count Results
+    if not data_list:
+        return [{"message": "No records found for the selected period."}]
+    
+    if isinstance(data_list, int):
+        return [{"total_count": data_list}]
+
+    formatted = []
+    
+    # Helper to clean up date objects for readability
+    def clean_date(dt):
+        return dt.strftime("%Y-%m-%d %H:%M") if hasattr(dt, 'strftime') else dt
+
+    # 2. Map Collection Data
+    for doc in data_list:
+        if collection_name == "position":
+            formatted.append({
+                "symbol": doc.get("symbolName"),
+                "type": doc.get("tradeType"),
+                "quantity": doc.get("totalQuantity"),
+                "price": doc.get("price"),
+                "p&l": doc.get("profitLoss"),
+                "time": clean_date(doc.get("createdAt"))
+            })
+        elif collection_name == "transaction":
+            formatted.append({
+                "amount": doc.get("amount"),
+                "category": doc.get("type"), # 'debit'/'credit'
+                "txn_type": doc.get("transactionType"), # 'brokerage'/'p&l' etc
+                "closing": doc.get("closing"),
+                "time": clean_date(doc.get("createdAt"))
+            })
+        elif collection_name == "user":
+            formatted.append({
+                "name": doc.get("name"),
+                "balance": doc.get("balance"),
+                "margin": doc.get("tradeMarginBalance"),
+                "p&l": doc.get("profitLoss")
+            })
+        elif collection_name == "trade":
+            formatted.append({
+                "symbol": doc.get("symbolName"),
+                "status": doc.get("status"),
+                "order": doc.get("orderType"),
+                "comment": doc.get("comment"),
+                "time": clean_date(doc.get("createdAt"))
+            })
+        elif collection_name == "paymentRequest":
+            status_map = {0: "Pending", 1: "Success/Approved", 2: "Rejected"}
+            formatted.append({
+                "type": doc.get("paymentRequestType"),
+                "amount": doc.get("amount"),
+                "status": status_map.get(doc.get("status"), "Unknown"),
+                "transaction_id": doc.get("transactionId"),
+                "date": clean_date(doc.get("createdAt"))
+            })
+        elif collection_name == "alerts":
+            formatted.append({
+                "alert": doc.get("message"),
+                "level": doc.get("level"),
+                "time": clean_date(doc.get("createdAt"))
+            })
+
+    # 3. Apply Advanced Report Logic (If dates are provided)
+    if start_date and end_date:
+        header = f"### 📊 {collection_name.upper()} REPORT\n"
+        header += f"*Period: {start_date} to {end_date}*\n"
+        header += f"*Total Records Found: {len(formatted)}*\n\n---\n"
+        # Return as a list containing a single string to maintain response consistency
+        return [header + json.dumps(formatted, indent=2)]
+
+    return formatted
+
+def llm_fallback(user_msg: str, user_id: str) -> str:
+    logger.info(f"--- Starting LLM Fallback Flow for User: {user_id} ---")
+
+    # 1. Greetings
     if _is_greeting(user_msg):
-        return "Hello. How can I help you today?"
+        logger.info(" STEP: Greeting detected.")
+        return "Hello! How can I assist with your trading account today?"
 
-    # 1) FAQ first
-    faq_lines = faq_reply(user_msg)
-    if faq_lines:
-        return "\n".join(faq_lines)
+    # 2. Smart DB Check
+    db_res = query_user_db(user_msg, user_id)
+    if db_res:
+        logger.info(f" STEP: Data found in {db_res['collection']}. Formatting...")
+        
+        # APPLY THE FORMATTER HERE
+        clean_data = format_db_results(db_res["data"], db_res["collection"])
+        
+        # Convert to pretty string
+        raw_json = json.dumps(clean_data, default=str, indent=2)
+        
+        return f"Your {db_res['collection']} records are:\n\n{raw_json}"
 
-    # 2) Domain guard (strong)
+    # 3. FAQ Check (Only runs if no DB data was found)
+    logger.info(" STEP: No DB data found. Moving to FAQ check.")
+    faq_answer = faq_reply(user_msg)
+    if faq_answer:
+        return faq_answer
+
+    # 4. Domain Guard
+    logger.info(" STEP: No FAQ match. Checking Domain Guard.")
+    # No FAQ match. Checking Domain Guard.
     ga = guard_action(user_msg)
     if ga["action"] == "refuse":
+        logger.info(" STEP: Message refused by Guard.")
+        # Message refused by Guard.
         return ga["message"]
 
-    # 3) Semantic router (optional; only if you want it)
-    # If your answer_from_faq can hallucinate, keep it disabled or keep it after guard.
-    try:
-        sem = answer_from_faq(user_msg)
-        sem_lines = _to_lines(sem)
-        if sem_lines:
-            return "\n".join(sem_lines)
-    except Exception as e:
-        print("answer_from_faq error:", e)
-
-    # 4) LLM answer
-    def _call_llm(system_prompt: str) -> str:
-        llm_url = os.getenv("LLM_URL")
-        if not llm_url:
-            print("Error: LLM_URL not set.")
-            return ""
-
-        if llm_url.endswith("/api/generate"):
-            llm_url = llm_url.replace("/api/generate", "/api/chat")
-
-        payload = {
-            "model": "phi:2.7b",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_msg},
-            ],
-            "stream": False,
-            "options": {"num_predict": 220, "temperature": 0.2},
-        }
-
-        r = requests.post(llm_url, json=payload, timeout=60)
-        r.raise_for_status()
-        d = r.json()
-        return (d.get("message", {}).get("content") or d.get("response") or "").strip()
-
-    SYSTEM = (
-        "You are a customer support agent for a trading app.\n"
-        "Answer ONLY trading support questions: buy/sell orders, order types (market/limit), stop loss/take profit, "
-        "positions/PNL, margin/leverage, symbols, deposits/withdrawals/KYC, login/OTP/password reset.\n"
-        "Rules:\n"
-        "- Do NOT mention any website/company/platform name.\n"
-        "- Do NOT mention AI, models, or system messages.\n"
-        "- Use simple English.\n"
-        "- Give a clear, practical answer.\n"
-        "- Target length: 90–120 words.\n"
+    # 5. General LLM Answer
+    logger.info(" STEP: Falling back to General LLM support.")
+    # Falling back to General LLM support.
+    SUPPORT_SYSTEM = (
+        "You are a customer support agent for a trading app. "
+        "Answer ONLY trading support questions (orders, PNL, KYC, deposits). "
+        "Simple English, no AI mention, 80-130 words."
     )
 
-    try:
-        raw = _call_llm(SYSTEM)
-        cleaned = _clean_llm_text(raw)
-        cleaned = _enforce_medium_length(cleaned, 80, 130)
-
-        # If too short after cleaning, regenerate once with extra instruction
-        if len(cleaned.split()) < 60:
-            raw2 = _call_llm(SYSTEM + "Make it 90–120 words by adding practical steps.")
-            cleaned2 = _clean_llm_text(raw2)
-            cleaned2 = _enforce_medium_length(cleaned2, 80, 130)
-            if cleaned2:
-                cleaned = cleaned2
-
-        if not cleaned:
-            return "Please ask about orders, account access, or payments."
-
-        return cleaned
-
-    except requests.exceptions.RequestException as e:
-        print("Request error:", e)
-        return "Sorry, something went wrong. Please try again."
-    except Exception as e:
-        print("LLM error:", e)
-        return "Sorry, something went wrong. Please try again."
-
-
+    raw_support = _call_llm_internal(SUPPORT_SYSTEM, user_msg)
+    cleaned = _clean_llm_text(raw_support)
+    return _enforce_medium_length(cleaned, 80, 130)
+    
 # ────────────────────── DB upserts ──────────────────────
 def ensure_bot_user() -> SCUser:
     bot = SCUser.objects(is_bot=True).first()
@@ -1359,22 +1510,33 @@ def cancel_pending_bot_reply(chat_id: str):
             except Exception:
                 pass
 
-def generate_bot_reply_lines(text: str) -> list[str]:
-    cached = cache_get(text)
-    if cached:
-        lines = _to_lines(cached)
-        if lines:
-            return lines
+def generate_bot_reply_lines(text: str, user_id: str = None) -> list[str]:
+    """
+    Main entry point for the bot. 
+    Always returns a LIST of strings to prevent vertical character splitting.
+    """
+    if not text:
+        return []
 
-    faq_lines = faq_reply(text)
-    if faq_lines:
-        cache_set(text, faq_lines)
-        return faq_lines
+    # 1. (Optional) Insert your cache logic here if you use it
 
-    ai = llm_fallback(text)
-    lines = [ln.strip() for ln in (ai or "").split("\n") if ln.strip()]
-    cache_set(text, lines)
-    return lines
+    # 2. Get the response from your AI model flow
+    # Pass user_id so query_user_db can filter by the specific user
+    ai_response = llm_fallback(text, user_id)
+
+    # 3. THE CRITICAL FIX: Ensure the output is a LIST
+    # If ai_response is "Hello World", split('\n') makes it ["Hello World"]
+    # If ai_response is already a list, it returns as is.
+    if isinstance(ai_response, str):
+        # We split by newlines to keep paragraphs separate but as full sentences
+        lines = [line.strip() for line in ai_response.split('\n') if line.strip()]
+        return lines
+    
+    # If it's already a list (like from a specific FAQ return), return it
+    if isinstance(ai_response, list):
+        return ai_response
+
+    return []
 
 def schedule_bot_reply_after_2m(chat, chat_id: str, user_text: str):
     cancel_pending_bot_reply(chat_id)
