@@ -91,13 +91,13 @@ function UserView({ token }: { token: string }) {
   }, [chatId, resetLiveMessages])
 
 
-const normalizedLive = useMemo(() => {
-  return messages.map((m) => ({
-    ...m,
-    from: m.from === "superadmin" ? "admin" : m.from,
-    status: "delivered" as const,
-  }))
-}, [messages])
+  const normalizedLive = useMemo(() => {
+    return messages.map((m) => ({
+      ...m,
+      from: m.from === "superadmin" ? "admin" : m.from,
+      status: "delivered" as const,
+    }))
+  }, [messages])
 
   const combined = useMemo(() => [...historyItems, ...optimisticMessages, ...normalizedLive], [historyItems, optimisticMessages, normalizedLive])
 
@@ -111,12 +111,12 @@ const normalizedLive = useMemo(() => {
         const newMessages = prev.filter((optMsg) => {
           const recentServerMsg = normalizedLive.find((serverMsg) => {
             if (optMsg.kind === "text" && serverMsg.kind === "text") {
-              return optMsg.text === serverMsg.text && 
-                     Math.abs(new Date(optMsg.created_at).getTime() - new Date(serverMsg.created_at).getTime()) < 5000
+              return optMsg.text === serverMsg.text &&
+                Math.abs(new Date(optMsg.created_at).getTime() - new Date(serverMsg.created_at).getTime()) < 5000
             }
             if (optMsg.kind === "file" && serverMsg.kind === "file") {
               return optMsg.file_name === serverMsg.file_name &&
-                     Math.abs(new Date(optMsg.created_at).getTime() - new Date(serverMsg.created_at).getTime()) < 5000
+                Math.abs(new Date(optMsg.created_at).getTime() - new Date(serverMsg.created_at).getTime()) < 5000
             }
             return false
           })
@@ -142,16 +142,14 @@ const normalizedLive = useMemo(() => {
 
   return (
     <main className="h-[100dvh] w-full max-w-full mx-auto flex flex-col bg-[#e5ddd5] dark:bg-[#0b141a]">
-      <header 
+      <header
         className="bg-[#008069] dark:bg-[#202c33] px-4 py-3 flex items-center justify-between shadow-sm"
         role="banner"
       >
         <div className="flex items-center gap-3 flex-1 min-w-0">
           <div className="flex-shrink-0">
-            <div className="w-10 h-10 rounded-full bg-[#ffffff] dark:bg-[#2a3942] flex items-center justify-center">
-              <span className="text-lg font-semibold text-[#008069] dark:text-[#53bdeb]" aria-hidden="true">
-                C
-              </span>
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#008069] to-[#006b58] dark:from-[#53bdeb] dark:to-[#008069] flex items-center justify-center overflow-hidden shadow-sm">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white"><path d="M12 6V2H8" /><path d="M15 11v2" /><path d="M2 12h2" /><path d="M20 12h2" /><path d="M20 16a2 2 0 0 1-2 2H8.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 4 20.286V8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z" /><path d="M9 11v2" /></svg>
             </div>
           </div>
           <div className="flex-1 min-w-0">
@@ -159,8 +157,8 @@ const normalizedLive = useMemo(() => {
               <h1 className="text-base font-semibold text-[#ffffff] dark:text-[#e9edef] truncate">
                 Support Team
               </h1>
-              <span 
-                className="flex-shrink-0" 
+              <span
+                className="flex-shrink-0"
                 aria-label="Verified business account"
                 title="Verified business account"
               >
@@ -181,12 +179,11 @@ const normalizedLive = useMemo(() => {
               </span>
             </div>
             <div className="flex items-center gap-1.5 mt-0.5">
-              <span 
-                className={`text-xs ${
-                  status === "open" 
-                    ? "text-[#ffffff] dark:text-[#8696a0]" 
+              <span
+                className={`text-xs ${status === "open"
+                    ? "text-[#ffffff] dark:text-[#8696a0]"
                     : "text-[#ffffff]/80 dark:text-[#8696a0]"
-                }`}
+                  }`}
                 aria-live="polite"
                 aria-atomic="true"
               >
@@ -287,7 +284,7 @@ const normalizedLive = useMemo(() => {
       </header>
 
       {isLoading && (
-        <div 
+        <div
           className="p-4 text-sm text-[#667781] dark:text-[#8696a0] text-center"
           role="status"
           aria-live="polite"
