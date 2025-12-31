@@ -40,3 +40,10 @@ body {
     --whatsapp-input-bg: #2a3942;
   }
 }
+
+.chat-box-wrapper td, .chat-box-wrapper th {
+  padding: 1px 5px;
+}
+.chat-box-wrapper th {
+  text-align: left;
+}

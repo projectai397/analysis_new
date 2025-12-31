@@ -113,6 +113,28 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
     return text.replace(/\s+/g, ' ').trim()
   }
 
+  const parseEmojis = (text: string): string => {
+    if (!text) return text
+    
+    return text
+      .replace(/\\ud([0-9a-fA-F]{3})\\ud([0-9a-fA-F]{3})/g, (match, high, low) => {
+        const highSurrogate = parseInt('d' + high, 16)
+        const lowSurrogate = parseInt('d' + low, 16)
+        if (highSurrogate >= 0xD800 && highSurrogate <= 0xDBFF && lowSurrogate >= 0xDC00 && lowSurrogate <= 0xDFFF) {
+          const codePoint = (highSurrogate - 0xD800) * 0x400 + (lowSurrogate - 0xDC00) + 0x10000
+          return String.fromCodePoint(codePoint)
+        }
+        return match
+      })
+      .replace(/\\u([0-9a-fA-F]{4})/g, (match, code) => {
+        const charCode = parseInt(code, 16)
+        if (charCode >= 0xD800 && charCode <= 0xDFFF) {
+          return match
+        }
+        return String.fromCharCode(charCode)
+      })
+  }
+
   const shouldShowDateSeparator = (current: ConversationItem, previous: ConversationItem | undefined) => {
     if (!previous) return true
     const currentDate = new Date(current.created_at).toDateString()
@@ -138,7 +160,7 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
   return (
     <div 
       ref={containerRef}
-      className="flex-1 overflow-y-auto px-4 py-2 space-y-1"
+      className="flex-1 overflow-y-auto px-4 py-2 space-y-1 chat-box-wrapper"
       role="log"
       aria-label="Chat messages"
       aria-live="polite"
@@ -197,12 +219,35 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
               >
                 {m.kind === "text" && (
                   <div className="space-y-1">
-                    <p className="whitespace-pre-wrap text-pretty break-words leading-relaxed">
-                      {(() => {
-                        const normalizedText = normalizeText(m.text)
-                        return searchQuery && searchQuery.trim() ? highlightText(normalizedText) : normalizedText
-                      })()}
-                    </p>
+                    {(() => {
+                      const emojiParsedText = parseEmojis(m.text)
+                      const normalizedText = normalizeText(emojiParsedText)
+                      const containsHTML = /<[^>]+>/.test(normalizedText)
+                      
+                      if (containsHTML) {
+                        let htmlContent = normalizedText
+                        if (searchQuery && searchQuery.trim()) {
+                          const query = searchQuery.trim()
+                          const escapedQuery = escapeRegex(query)
+                          const regex = new RegExp(`(${escapedQuery})`, "gi")
+                          htmlContent = htmlContent.replace(regex, (match) => 
+                            `<mark class="bg-yellow-300 dark:bg-yellow-600/50 px-0.5 rounded">${match}</mark>`
+                          )
+                        }
+                        return (
+                          <div 
+                            className="whitespace-pre-wrap text-pretty break-words leading-relaxed"
+                            dangerouslySetInnerHTML={{ __html: htmlContent }}
+                          />
+                        )
+                      } else {
+                        return (
+                          <p className="whitespace-pre-wrap text-pretty break-words leading-relaxed">
+                            {searchQuery && searchQuery.trim() ? highlightText(normalizedText) : normalizedText}
+                          </p>
+                        )
+                      }
+                    })()}
                     {m.meta?.domain === "out_of_scope" && (
                       <p className="text-xs text-[#667781] dark:text-[#8696a0] mt-1" role="note">
                         Topic not supported.
