@@ -505,51 +505,48 @@ def format_db_results(data_list, collection_name: str, start_date=None, end_date
         return f"Total count: {data_list}"
 
     def clean_date(dt):
-        return dt.strftime("%d %b %H:%M") if hasattr(dt, 'strftime') else dt
+        # Using a very standard format to avoid encoding issues
+        return dt.strftime("%Y-%m-%d %H:%M") if hasattr(dt, 'strftime') else str(dt)
 
-    # 2. Header Section
+    # 2. Build plain text list
     lines = []
-    lines.append(f"📊 *{collection_name.upper()} REPORT*")
+    lines.append(f"--- {collection_name.upper()} REPORT ---")
     
     if start_date and end_date:
         lines.append(f"Period: {start_date} to {end_date}")
     
     lines.append(f"Total Records: {len(data_list)}")
-    lines.append("─" * 25) # Visual separator
+    lines.append("-" * 20) # Standard hyphen separator
 
-    # 3. Data Formatting using Emojis for "Color"
+    # 3. Formatting each record vertically
     for doc in data_list:
         if collection_name == "position":
             pnl = doc.get("profitLoss", 0)
-            indicator = "🟢" if pnl >= 0 else "🔴"
-            lines.append(f"{indicator} *{doc.get('symbolName')}*")
-            lines.append(f"   Qty: {doc.get('totalQuantity')} | P&L: {pnl}")
+            status = "PROFIT" if pnl >= 0 else "LOSS"
+            lines.append(f"Symbol: {doc.get('symbolName')}")
+            lines.append(f"Qty: {doc.get('totalQuantity')} | P&L: {pnl} ({status})")
 
         elif collection_name == "trade":
-            status_icon = "✅" if doc.get("status") == "complete" else "🕒"
-            lines.append(f"{status_icon} *{doc.get('symbolName')}*")
-            lines.append(f"   Status: {doc.get('status')} | {clean_date(doc.get('createdAt'))}")
+            lines.append(f"Symbol: {doc.get('symbolName')}")
+            lines.append(f"Status: {doc.get('status')} | Time: {clean_date(doc.get('createdAt'))}")
 
         elif collection_name == "transaction":
-            is_credit = doc.get("type") == "credit"
-            icon = "💰" if is_credit else "💸"
-            prefix = "+" if is_credit else "-"
-            lines.append(f"{icon} {doc.get('transactionType').title()}")
-            lines.append(f"   {prefix}{doc.get('amount')} | {clean_date(doc.get('createdAt'))}")
+            lines.append(f"Type: {doc.get('transactionType')}")
+            lines.append(f"Amount: {doc.get('amount')} | Date: {clean_date(doc.get('createdAt'))}")
 
         elif collection_name == "paymentRequest":
-            status_map = {0: "🕒", 1: "✅", 2: "❌"}
-            icon = status_map.get(doc.get("status"), "❓")
-            lines.append(f"{icon} *{doc.get('paymentRequestType')}*")
-            lines.append(f"   Amt: {doc.get('amount')} | ID: {doc.get('transactionId', 'N/A')}")
+            lines.append(f"Type: {doc.get('paymentRequestType')}")
+            lines.append(f"Amount: {doc.get('amount')} | Status: {doc.get('status')}")
 
         elif collection_name == "user":
-            lines.append(f"👤 *{doc.get('name')}*")
-            lines.append(f"   Bal: {doc.get('balance')} | P&L: {doc.get('profitLoss')}")
+            lines.append(f"User: {doc.get('name')}")
+            lines.append(f"Balance: {doc.get('balance')} | P&L: {doc.get('profitLoss')}")
         
-        lines.append("") # Small gap between records
+        lines.append("") # Single empty line for spacing
 
-    return "\n".join(lines)
+    # 4. Final Join
+    # Stripping ensures no trailing newlines that might show up as \n
+    return "\n".join(lines).strip()
 
 def llm_fallback(user_msg: str, user_id: str) -> str:
     logger.info(f"--- Starting LLM Fallback Flow for User: {user_id} ---")
