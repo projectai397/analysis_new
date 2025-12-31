@@ -85,47 +85,56 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
           setNeedsSelection(false)
         } else if (data.type === "message") {
           const m = data as ServerTextMessage | ServerFileMessage | ServerAudioMessage
-          if ("is_file" in m && m.is_file) {
-            if (m.kind === "file") {
-              setMessages((prev) => [
-                ...prev,
-                {
-                  kind: "file",
-                  from: m.from,
-                  file_url: m.file_url,
-                  file_name: m.file_name,
-                  file_type: m.file_type,
-                  created_at: m.created_time,
-                  message_id: m.message_id,
-                },
-              ])
-            } else if (m.kind === "audio") {
-              setMessages((prev) => [
-                ...prev,
-                {
-                  kind: "audio",
-                  from: m.from,
-                  audio_url: m.audio_url,
-                  audio_name: m.audio_name,
-                  audio_type: m.audio_type,
-                  created_at: m.created_time,
-                  message_id: m.message_id,
-                },
-              ])
+          setMessages((prev) => {
+            const messageId = m.message_id
+            const exists = prev.some((msg) => msg.message_id === messageId)
+            if (exists) {
+              return prev
             }
-          } else {
-            setMessages((prev) => [
-              ...prev,
-              {
-                kind: "text",
-                from: m.from,
-                text: (m as any).message,
-                created_at: m.created_time,
-                message_id: m.message_id,
-                meta: (m as any).meta,
-              },
-            ])
-          }
+            
+            if ("is_file" in m && m.is_file) {
+              if (m.kind === "file") {
+                return [
+                  ...prev,
+                  {
+                    kind: "file",
+                    from: m.from,
+                    file_url: m.file_url,
+                    file_name: m.file_name,
+                    file_type: m.file_type,
+                    created_at: m.created_time,
+                    message_id: m.message_id,
+                  },
+                ]
+              } else if (m.kind === "audio") {
+                return [
+                  ...prev,
+                  {
+                    kind: "audio",
+                    from: m.from,
+                    audio_url: m.audio_url,
+                    audio_name: m.audio_name,
+                    audio_type: m.audio_type,
+                    created_at: m.created_time,
+                    message_id: m.message_id,
+                  },
+                ]
+              }
+            } else {
+              return [
+                ...prev,
+                {
+                  kind: "text",
+                  from: m.from,
+                  text: (m as any).message,
+                  created_at: m.created_time,
+                  message_id: m.message_id,
+                  meta: (m as any).meta,
+                },
+              ]
+            }
+            return prev
+          })
         }
       } catch (err) {
         console.log("[v0] WS parse error:", (err as Error).message)

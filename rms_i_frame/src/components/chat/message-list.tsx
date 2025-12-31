@@ -15,13 +15,26 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
   }, [items])
 
+  const prevSearchQueryRef = useRef<string>("")
+
   useEffect(() => {
-    if (!searchQuery || !searchQuery.trim()) {
-      setHighlightedIds(new Set())
+    const searchQueryTrimmed = searchQuery?.trim() || ""
+    
+    if (!searchQueryTrimmed) {
+      if (highlightedIds.size > 0) {
+        setHighlightedIds(new Set())
+      }
+      prevSearchQueryRef.current = ""
       return
     }
 
-    const query = searchQuery.trim().toLowerCase()
+    if (prevSearchQueryRef.current === searchQueryTrimmed) {
+      return
+    }
+
+    prevSearchQueryRef.current = searchQueryTrimmed
+
+    const query = searchQueryTrimmed.toLowerCase()
     const matchingIds = new Set<string>()
     
     items.forEach((item, idx) => {
@@ -45,16 +58,18 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
       setHighlightedIds(matchingIds)
       
       const firstMatchKey = Array.from(matchingIds)[0]
-      const firstMatchElement = messageRefs.current.get(firstMatchKey)
-      if (firstMatchElement) {
-        setTimeout(() => {
+      setTimeout(() => {
+        const firstMatchElement = messageRefs.current.get(firstMatchKey)
+        if (firstMatchElement) {
           firstMatchElement.scrollIntoView({ behavior: "smooth", block: "center" })
-        }, 100)
-      }
+        }
+      }, 100)
 
       setTimeout(() => {
         setHighlightedIds(new Set())
       }, 1000)
+    } else {
+      setHighlightedIds(new Set())
     }
   }, [searchQuery, items])
 
@@ -78,6 +93,24 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
     }
     return date.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + ", " + 
            date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
+  }
+
+  const normalizeText = (text: string): string => {
+    if (!text) return text
+    
+    const trimmed = text.trim()
+    if (!trimmed) return text
+    
+    const hasSpacedChars = /^(\S\s)+\S?$/.test(trimmed)
+    
+    if (hasSpacedChars) {
+      const noSpaces = trimmed.replace(/\s+/g, '')
+      let normalized = noSpaces.replace(/([a-z])([A-Z])/g, '$1 $2')
+      normalized = normalized.replace(/([.!?,;:])([A-Za-z])/g, '$1 $2')
+      return normalized
+    }
+    
+    return text.replace(/\s+/g, ' ').trim()
   }
 
   const shouldShowDateSeparator = (current: ConversationItem, previous: ConversationItem | undefined) => {
@@ -165,7 +198,10 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
                 {m.kind === "text" && (
                   <div className="space-y-1">
                     <p className="whitespace-pre-wrap text-pretty break-words leading-relaxed">
-                      {searchQuery && searchQuery.trim() ? highlightText(m.text) : m.text}
+                      {(() => {
+                        const normalizedText = normalizeText(m.text)
+                        return searchQuery && searchQuery.trim() ? highlightText(normalizedText) : normalizedText
+                      })()}
                     </p>
                     {m.meta?.domain === "out_of_scope" && (
                       <p className="text-xs text-[#667781] dark:text-[#8696a0] mt-1" role="note">
