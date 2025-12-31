@@ -415,138 +415,97 @@ def query_user_db(user_msg: str, user_id: str):
         logger.error(f" [1.7] DB_CHECK_ERROR: {e}")
         return None
     
-# def format_db_results(data_list, collection_name: str, start_date=None, end_date=None) -> str:
-#     # 1. Handle Empty or Count Results
-#     if not data_list:
-#         return "No records found for the selected period."
-    
-#     if isinstance(data_list, int):
-#         return f"<b>Total count:</b> {data_list}"
-
-#     def clean_date(dt):
-#         return dt.strftime("%d %b %H:%M") if hasattr(dt, 'strftime') else dt
-
-#     # Base Styles
-#     t_style = 'width:100%; border-collapse: collapse; font-family: sans-serif; font-size: 13px; margin-top: 5px;'
-#     th_style = 'background-color: #f8f9fa; border-bottom: 2px solid #dee2e6; padding: 6px; text-align: left;'
-#     td_base = 'border-bottom: 1px solid #dee2e6; padding: 6px;'
-
-#     html_parts = []
-#     html_parts.append(f"<b>📊 {collection_name.upper()} REPORT</b><br>")
-    
-#     if start_date and end_date:
-#         html_parts.append(f"<small>Period: {start_date} to {end_date}</small><br>")
-    
-#     html_parts.append(f"<small>Total Records: {len(data_list)}</small><br>")
-#     html_parts.append(f'<table style="{t_style}"><thead><tr>')
-
-#     rows_parts = []
-    
-#     if collection_name == "position":
-#         html_parts.append(f'<th style="{th_style}">Symbol</th><th style="{th_style}">Qty</th><th style="{th_style}">P&L</th></tr></thead><tbody>')
-#         for doc in data_list:
-#             pnl = doc.get("profitLoss", 0)
-#             # COMBINED STYLE: Prevents the double 'style=' attribute error
-#             pnl_color = "color: green;" if pnl >= 0 else "color: red;"
-#             rows_parts.append(f'''<tr>
-#                 <td style="{td_base}">{doc.get("symbolName")}</td>
-#                 <td style="{td_base}">{doc.get("totalQuantity")}</td>
-#                 <td style="{td_base} {pnl_color} font-weight: bold;">{pnl}</td>
-#             </tr>''')
-
-#     elif collection_name == "trade":
-#         html_parts.append(f'<th style="{th_style}">Symbol</th><th style="{th_style}">Status</th><th style="{th_style}">Time</th></tr></thead><tbody>')
-#         for doc in data_list:
-#             rows_parts.append(f'''<tr>
-#                 <td style="{td_base}">{doc.get("symbolName")}</td>
-#                 <td style="{td_base}">{doc.get("status")}</td>
-#                 <td style="{td_base}">{clean_date(doc.get("createdAt"))}</td>
-#             </tr>''')
-
-#     elif collection_name == "transaction":
-#         html_parts.append(f'<th style="{th_style}">Amt</th><th style="{th_style}">Type</th><th style="{th_style}">Time</th></tr></thead><tbody>')
-#         for doc in data_list:
-#             amt_color = "color: green;" if doc.get("type") == "credit" else "color: red;"
-#             rows_parts.append(f'''<tr>
-#                 <td style="{td_base} {amt_color}">{doc.get("amount")}</td>
-#                 <td style="{td_base}">{doc.get("transactionType")}</td>
-#                 <td style="{td_base}">{clean_date(doc.get("createdAt"))}</td>
-#             </tr>''')
-
-#     elif collection_name == "paymentRequest":
-#         status_map = {0: "🕒 Pending", 1: "✅ Approved", 2: "❌ Rejected"}
-#         html_parts.append(f'<th style="{th_style}">Method</th><th style="{th_style}">Amount</th><th style="{th_style}">Status</th></tr></thead><tbody>')
-#         for doc in data_list:
-#             rows_parts.append(f'''<tr>
-#                 <td style="{td_base}">{doc.get("paymentRequestType")}</td>
-#                 <td style="{td_base}">{doc.get("amount")}</td>
-#                 <td style="{td_base}">{status_map.get(doc.get("status"), "Unknown")}</td>
-#             </tr>''')
-
-#     elif collection_name == "user":
-#         html_parts.append(f'<th style="{th_style}">User</th><th style="{th_style}">Balance</th><th style="{th_style}">P&L</th></tr></thead><tbody>')
-#         for doc in data_list:
-#             rows_parts.append(f'''<tr>
-#                 <td style="{td_base}">{doc.get("name")}</td>
-#                 <td style="{td_base}">{doc.get("balance")}</td>
-#                 <td style="{td_base}">{doc.get("profitLoss")}</td>
-#             </tr>''')
-
-#     html_parts.extend(rows_parts)
-#     html_parts.append("</tbody></table>")
-#     return "".join(html_parts)
-
 def format_db_results(data_list, collection_name: str, start_date=None, end_date=None) -> str:
     # 1. Handle Empty or Count Results
     if not data_list:
-        return "No records found for the selected period."
+        return "<context><p>No records found for the selected period.</p></context>"
     
     if isinstance(data_list, int):
-        return f"Total count: {data_list}"
+        return f"<context><head><b>Total count:</b></head> {data_list}</context>"
 
     def clean_date(dt):
-        # Using a very standard format to avoid encoding issues
-        return dt.strftime("%Y-%m-%d %H:%M") if hasattr(dt, 'strftime') else str(dt)
+        return dt.strftime("%d %b %H:%M") if hasattr(dt, 'strftime') else dt
 
-    # 2. Build plain text list
-    lines = []
-    lines.append(f"--- {collection_name.upper()} REPORT ---")
+    # Style Definitions
+    t_style = 'width:100%; border-collapse: collapse; font-family: sans-serif; font-size: 13px; margin-top: 8px;'
+    th_style = 'background-color: #f8f9fa; border-bottom: 2px solid #dee2e6; padding: 8px; text-align: left; color: #495057;'
+    td_base = 'border-bottom: 1px solid #dee2e6; padding: 8px; vertical-align: top;'
+
+    html_parts = []
     
+    # 2. Start Context Tag
+    html_parts.append("<context>")
+    
+    # 3. Build the Head Tag (Title and Metadata)
+    html_parts.append("<head>")
+    html_parts.append(f"<b>📊 {collection_name.upper()} REPORT</b><br>")
     if start_date and end_date:
-        lines.append(f"Period: {start_date} to {end_date}")
+        html_parts.append(f"<small style='color: #6c757d;'>Period: {start_date} to {end_date}</small><br>")
+    html_parts.append(f"<small style='color: #6c757d;'>Total Records: {len(data_list)}</small>")
+    html_parts.append("</head>")
+
+    # 4. Start Table
+    html_parts.append(f'<table style="{t_style}"><thead><tr>')
+
+    rows_parts = []
     
-    lines.append(f"Total Records: {len(data_list)}")
-    lines.append("-" * 20) # Standard hyphen separator
-
-    # 3. Formatting each record vertically
-    for doc in data_list:
-        if collection_name == "position":
+    if collection_name == "position":
+        html_parts.append(f'<th style="{th_style}">Symbol</th><th style="{th_style}">Qty</th><th style="{th_style}">P&L</th></tr></thead><tbody>')
+        for doc in data_list:
             pnl = doc.get("profitLoss", 0)
-            status = "PROFIT" if pnl >= 0 else "LOSS"
-            lines.append(f"Symbol: {doc.get('symbolName')}")
-            lines.append(f"Qty: {doc.get('totalQuantity')} | P&L: {pnl} ({status})")
+            pnl_color = "color: #28a745;" if pnl >= 0 else "color: #dc3545;"
+            rows_parts.append(f'<tr>'
+                              f'<td style="{td_base}">{doc.get("symbolName")}</td>'
+                              f'<td style="{td_base}">{doc.get("totalQuantity")}</td>'
+                              f'<td style="{td_base} {pnl_color} font-weight: bold;">{pnl}</td>'
+                              f'</tr>')
 
-        elif collection_name == "trade":
-            lines.append(f"Symbol: {doc.get('symbolName')}")
-            lines.append(f"Status: {doc.get('status')} | Time: {clean_date(doc.get('createdAt'))}")
+    elif collection_name == "trade":
+        html_parts.append(f'<th style="{th_style}">Symbol</th><th style="{th_style}">Status</th><th style="{th_style}">Time</th></tr></thead><tbody>')
+        for doc in data_list:
+            rows_parts.append(f'<tr>'
+                              f'<td style="{td_base}">{doc.get("symbolName")}</td>'
+                              f'<td style="{td_base}">{doc.get("status")}</td>'
+                              f'<td style="{td_base}">{clean_date(doc.get("createdAt"))}</td>'
+                              f'</tr>')
 
-        elif collection_name == "transaction":
-            lines.append(f"Type: {doc.get('transactionType')}")
-            lines.append(f"Amount: {doc.get('amount')} | Date: {clean_date(doc.get('createdAt'))}")
+    elif collection_name == "transaction":
+        html_parts.append(f'<th style="{th_style}">Amt</th><th style="{th_style}">Type</th><th style="{th_style}">Time</th></tr></thead><tbody>')
+        for doc in data_list:
+            is_credit = doc.get("type") == "credit"
+            amt_color = "color: #28a745;" if is_credit else "color: #dc3545;"
+            prefix = "+" if is_credit else "-"
+            rows_parts.append(f'<tr>'
+                              f'<td style="{td_base} {amt_color}">{prefix}{doc.get("amount")}</td>'
+                              f'<td style="{td_base}">{doc.get("transactionType")}</td>'
+                              f'<td style="{td_base}">{clean_date(doc.get("createdAt"))}</td>'
+                              f'</tr>')
 
-        elif collection_name == "paymentRequest":
-            lines.append(f"Type: {doc.get('paymentRequestType')}")
-            lines.append(f"Amount: {doc.get('amount')} | Status: {doc.get('status')}")
+    elif collection_name == "paymentRequest":
+        status_map = {0: "🕒 Pending", 1: "✅ Approved", 2: "❌ Rejected"}
+        html_parts.append(f'<th style="{th_style}">Method</th><th style="{th_style}">Amount</th><th style="{th_style}">Status</th></tr></thead><tbody>')
+        for doc in data_list:
+            rows_parts.append(f'<tr>'
+                              f'<td style="{td_base}">{doc.get("paymentRequestType")}</td>'
+                              f'<td style="{td_base}">{doc.get("amount")}</td>'
+                              f'<td style="{td_base}">{status_map.get(doc.get("status"), "Unknown")}</td>'
+                              f'</tr>')
 
-        elif collection_name == "user":
-            lines.append(f"User: {doc.get('name')}")
-            lines.append(f"Balance: {doc.get('balance')} | P&L: {doc.get('profitLoss')}")
-        
-        lines.append("") # Single empty line for spacing
+    elif collection_name == "user":
+        html_parts.append(f'<th style="{th_style}">User</th><th style="{th_style}">Balance</th><th style="{th_style}">P&L</th></tr></thead><tbody>')
+        for doc in data_list:
+            rows_parts.append(f'<tr>'
+                              f'<td style="{td_base}">{doc.get("name")}</td>'
+                              f'<td style="{td_base}">{doc.get("balance")}</td>'
+                              f'<td style="{td_base}">{doc.get("profitLoss")}</td>'
+                              f'</tr>')
 
-    # 4. Final Join
-    # Stripping ensures no trailing newlines that might show up as \n
-    return "\n".join(lines).strip()
+    # 5. Final Assembly
+    html_parts.extend(rows_parts)
+    html_parts.append("</tbody></table>")
+    html_parts.append("</context>") # Close Context
+    
+    return "".join(html_parts)
 
 def llm_fallback(user_msg: str, user_id: str) -> str:
     logger.info(f"--- Starting LLM Fallback Flow for User: {user_id} ---")
