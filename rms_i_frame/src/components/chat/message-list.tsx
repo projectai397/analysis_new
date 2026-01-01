@@ -2,18 +2,44 @@
 
 import { useEffect, useRef, useState } from "react"
 import type { ConversationItem, Role } from "@/lib/types"
-import { CheckCheck, Check, Clock } from "lucide-react"
+import { CheckCheck, Check, Clock, ChevronDown } from "lucide-react"
 
 export function MessageList({ items, viewerRole, searchQuery }: { items: ConversationItem[]; viewerRole: Role; searchQuery?: string }) {
   const baseurl = process.env.NEXT_PUBLIC_API_BASE_URL;
   const endRef = useRef<HTMLDivElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [highlightedIds, setHighlightedIds] = useState<Set<string>>(new Set())
+  const [currentHighlightIndex, setCurrentHighlightIndex] = useState<number>(0)
+  const highlightedIdsArrayRef = useRef<string[]>([])
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
+    setShowScrollToBottom(false)
   }, [items])
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const checkScrollPosition = () => {
+      const { scrollTop, scrollHeight, clientHeight } = container
+      const isNearBottom = scrollHeight - scrollTop - clientHeight < 100
+      setShowScrollToBottom(!isNearBottom)
+    }
+
+    container.addEventListener("scroll", checkScrollPosition)
+    checkScrollPosition()
+
+    return () => {
+      container.removeEventListener("scroll", checkScrollPosition)
+    }
+  }, [])
+
+  const scrollToBottom = () => {
+    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
+  }
 
   const prevSearchQueryRef = useRef<string>("")
 
@@ -24,6 +50,8 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
       if (highlightedIds.size > 0) {
         setHighlightedIds(new Set())
       }
+      highlightedIdsArrayRef.current = []
+      setCurrentHighlightIndex(-1)
       prevSearchQueryRef.current = ""
       return
     }
@@ -55,21 +83,14 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
     })
 
     if (matchingIds.size > 0) {
+      const matchingIdsArray = Array.from(matchingIds)
+      highlightedIdsArrayRef.current = matchingIdsArray
       setHighlightedIds(matchingIds)
-      
-      const firstMatchKey = Array.from(matchingIds)[0]
-      setTimeout(() => {
-        const firstMatchElement = messageRefs.current.get(firstMatchKey)
-        if (firstMatchElement) {
-          firstMatchElement.scrollIntoView({ behavior: "smooth", block: "center" })
-        }
-      }, 100)
-
-      setTimeout(() => {
-        setHighlightedIds(new Set())
-      }, 1000)
+      setCurrentHighlightIndex(-1)
     } else {
       setHighlightedIds(new Set())
+      highlightedIdsArrayRef.current = []
+      setCurrentHighlightIndex(-1)
     }
   }, [searchQuery, items])
 
@@ -78,6 +99,50 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
   useEffect(() => {
     setIsClient(true)
   }, [])
+
+  useEffect(() => {
+    if (!searchQuery || !searchQuery.trim() || highlightedIdsArrayRef.current.length === 0) {
+      return
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        const target = e.target as HTMLElement
+        const isComposer = target.closest('textarea') && target.closest('textarea')?.getAttribute('aria-label') === 'Type a message'
+        
+        if (isComposer) {
+          return
+        }
+
+        e.preventDefault()
+        e.stopPropagation()
+        
+        let nextIndex: number
+        if (currentHighlightIndex === -1) {
+          nextIndex = highlightedIdsArrayRef.current.length - 1
+        } else {
+          nextIndex = currentHighlightIndex - 1
+          if (nextIndex < 0) {
+            nextIndex = highlightedIdsArrayRef.current.length - 1
+          }
+        }
+        setCurrentHighlightIndex(nextIndex)
+        
+        const nextMatchKey = highlightedIdsArrayRef.current[nextIndex]
+        setTimeout(() => {
+          const nextMatchElement = messageRefs.current.get(nextMatchKey)
+          if (nextMatchElement) {
+            nextMatchElement.scrollIntoView({ behavior: "smooth", block: "center" })
+          }
+        }, 50)
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown, true)
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true)
+    }
+  }, [searchQuery, currentHighlightIndex])
 
   const formatTime = (dateString: string) => {
     if (!isClient) {
@@ -113,6 +178,28 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
     return text.replace(/\s+/g, ' ').trim()
   }
 
+  const parseEmojis = (text: string): string => {
+    if (!text) return text
+    
+    return text
+      .replace(/\\ud([0-9a-fA-F]{3})\\ud([0-9a-fA-F]{3})/g, (match, high, low) => {
+        const highSurrogate = parseInt('d' + high, 16)
+        const lowSurrogate = parseInt('d' + low, 16)
+        if (highSurrogate >= 0xD800 && highSurrogate <= 0xDBFF && lowSurrogate >= 0xDC00 && lowSurrogate <= 0xDFFF) {
+          const codePoint = (highSurrogate - 0xD800) * 0x400 + (lowSurrogate - 0xDC00) + 0x10000
+          return String.fromCodePoint(codePoint)
+        }
+        return match
+      })
+      .replace(/\\u([0-9a-fA-F]{4})/g, (match, code) => {
+        const charCode = parseInt(code, 16)
+        if (charCode >= 0xD800 && charCode <= 0xDFFF) {
+          return match
+        }
+        return String.fromCharCode(charCode)
+      })
+  }
+
   const shouldShowDateSeparator = (current: ConversationItem, previous: ConversationItem | undefined) => {
     if (!previous) return true
     const currentDate = new Date(current.created_at).toDateString()
@@ -136,14 +223,15 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
   }
 
   return (
-    <div 
-      ref={containerRef}
-      className="flex-1 overflow-y-auto px-4 py-2 space-y-1"
-      role="log"
-      aria-label="Chat messages"
-      aria-live="polite"
-      aria-atomic="false"
-    >
+    <div className="flex-1 relative flex flex-col min-h-0">
+      <div 
+        ref={containerRef}
+        className="flex-1 overflow-y-auto px-4 py-2 space-y-1 chat-box-wrapper min-h-0"
+        role="log"
+        aria-label="Chat messages"
+        aria-live="polite"
+        aria-atomic="false"
+      >
       {items.map((m, idx) => {
         const key = (m as any).message_id || `${m.kind}-${idx}-${m.created_at}`
         const isMine = viewerRole === "superadmin" ? m.from === "admin" : m.from === "user"
@@ -168,6 +256,20 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
           )
         }
 
+        const highlightHTML = (html: string, query: string) => {
+          if (!query || !query.trim()) return html
+          const escapedQuery = escapeRegex(query.trim())
+          const parts = html.split(/(<[^>]*>)/)
+          return parts.map((part) => {
+            if (part.startsWith('<') && part.endsWith('>')) {
+              return part
+            }
+            return part.replace(new RegExp(`(${escapedQuery})`, "gi"), (match) => 
+              `<mark class="bg-yellow-300 dark:bg-yellow-600/50 px-0.5 rounded">${match}</mark>`
+            )
+          }).join('')
+        }
+
         return (
           <div key={key} ref={(el) => {
             if (el) {
@@ -189,20 +291,36 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
                   isMine
                     ? "bg-[#dcf8c6] dark:bg-[#005c4b] text-[#111b21] dark:text-[#e9edef] rounded-tr-none"
                     : "bg-[#ffffff] dark:bg-[#202c33] text-[#111b21] dark:text-[#e9edef] rounded-tl-none"
-                } ${
-                  isHighlighted ? "bg-yellow-300 dark:bg-yellow-600/30 ring-2 ring-yellow-400 dark:ring-yellow-500" : ""
                 }`}
                 role="article"
                 aria-label={isMine ? "Your message" : "Received message"}
               >
                 {m.kind === "text" && (
                   <div className="space-y-1">
-                    <p className="whitespace-pre-wrap text-pretty break-words leading-relaxed">
-                      {(() => {
-                        const normalizedText = normalizeText(m.text)
-                        return searchQuery && searchQuery.trim() ? highlightText(normalizedText) : normalizedText
-                      })()}
-                    </p>
+                    {(() => {
+                      const emojiParsedText = parseEmojis(m.text)
+                      const normalizedText = normalizeText(emojiParsedText)
+                      const containsHTML = /<[^>]+>/.test(normalizedText)
+                      
+                      if (containsHTML) {
+                        let htmlContent = normalizedText
+                        if (searchQuery && searchQuery.trim()) {
+                          htmlContent = highlightHTML(htmlContent, searchQuery)
+                        }
+                        return (
+                          <div 
+                            className="whitespace-pre-wrap text-pretty break-words leading-relaxed"
+                            dangerouslySetInnerHTML={{ __html: htmlContent }}
+                          />
+                        )
+                      } else {
+                        return (
+                          <p className="whitespace-pre-wrap text-pretty break-words leading-relaxed">
+                            {searchQuery && searchQuery.trim() ? highlightText(normalizedText) : normalizedText}
+                          </p>
+                        )
+                      }
+                    })()}
                     {m.meta?.domain === "out_of_scope" && (
                       <p className="text-xs text-[#667781] dark:text-[#8696a0] mt-1" role="note">
                         Topic not supported.
@@ -281,6 +399,17 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
         )
       })}
       <div ref={endRef} aria-hidden="true" />
+      </div>
+      {showScrollToBottom && (
+        <button
+          onClick={scrollToBottom}
+          className="absolute bottom-4 right-4 w-10 h-10 bg-[#008069] dark:bg-[#008069] rounded-full flex items-center justify-center shadow-lg hover:bg-[#006b58] dark:hover:bg-[#006b58] transition-all duration-200 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-[#008069] focus:ring-offset-2 z-10"
+          aria-label="Scroll to bottom"
+          title="Scroll to bottom"
+        >
+          <ChevronDown className="w-5 h-5 text-white" aria-hidden="true" />
+        </button>
+      )}
     </div>
   )
 }
