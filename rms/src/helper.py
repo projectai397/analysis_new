@@ -331,53 +331,117 @@ def _call_llm_internal(system_prompt: str, user_msg: str) -> str:
     
 from datetime import datetime, time as datetime_time # Import alias to avoid conflict
 
-def query_user_db(user_msg: str, user_id: str):
+def _extract_text(user_msg) -> str:
+    """
+    Accepts:
+      - plain string ("how to trade")
+      - JSON string ('{"type":"message","text":"how to trade"}')
+      - dict ({"type":"message","text":"how to trade"})
+    Returns extracted text if present, else the original string.
+    """
+    if isinstance(user_msg, dict):
+        return str(user_msg.get("text") or "").strip()
+
+    if not isinstance(user_msg, str):
+        return str(user_msg or "").strip()
+
+    s = user_msg.strip()
+    if not s:
+        return s
+
+    # Try parse JSON string safely
+    if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
+        try:
+            obj = json.loads(s)
+            if isinstance(obj, dict) and "text" in obj:
+                return str(obj.get("text") or "").strip()
+        except Exception:
+            pass
+
+    return s
+
+def _has_word(msg: str, word: str) -> bool:
+    # exact word match (prevents "me" matching "message")
+    return re.search(rf"\b{re.escape(word)}\b", msg) is not None
+
+def _has_phrase(msg: str, phrase: str) -> bool:
+    # phrase match with normalization
+    return phrase in msg
+
+def query_user_db(user_msg, user_id: str):
     logger.info(f" [1] DB_CHECK: Starting for user: {user_id}")
-    msg = user_msg.lower()
+
+    # 0) Extract actual user text (critical)
+    text = _extract_text(user_msg)
+    msg = text.lower().strip()
     coll_name = None
-    
+
     # --- 1. DATE RANGE DETECTION ---
     date_pattern = r'(\d{1,2}[/-]\d{1,2}[/-]\d{4})'
-    found_dates = re.findall(date_pattern, user_msg)
-    
+    found_dates = re.findall(date_pattern, text)
+
     date_filter = None
     if len(found_dates) >= 2:
         try:
-            # Convert DD/MM/YYYY to start of day (00:00:00)
             start_dt = datetime.strptime(found_dates[0].replace('-', '/'), "%d/%m/%Y")
-            
-            # THE FIX: Use datetime_time.max to get end of day (23:59:59)
-            # This ensures trades made on the afternoon of the final day are included
             end_base = datetime.strptime(found_dates[1].replace('-', '/'), "%d/%m/%Y")
-            end_dt = datetime.combine(end_base, datetime_time.max) 
-            
+            end_dt = datetime.combine(end_base, datetime_time.max)
             date_filter = {"$gte": start_dt, "$lte": end_dt}
             logger.info(f" [1.1] DATE_FILTER_MATCH: {start_dt} to {end_dt}")
         except Exception as e:
             logger.error(f" [1.2] DATE_PARSE_ERROR: {e}")
 
     # --- 2. ID DETECTION ---
-    id_pattern = r'[a-zA-Z0-9]{8}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{12}|[a-zA-Z0-9]{20,40}'
-    id_match = re.search(id_pattern, user_msg)
+    id_pattern = (
+        r'[a-zA-Z0-9]{8}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{12}'
+        r'|[a-zA-Z0-9]{20,40}'
+    )
+    id_match = re.search(id_pattern, text)
     found_id = id_match.group() if id_match else None
 
     # --- 3. INTENT FLAGS ---
-    is_last_query = any(word in msg for word in ["last", "latest", "recent"])
-    is_count_query = any(word in msg for word in ["how many", "count", "total"])
+    is_last_query  = any(w in msg for w in ["last", "latest", "recent"])
+    is_count_query = any(w in msg for w in ["how many", "count", "total"])
+
+    # --- 3.5 PERSONAL vs EDUCATIONAL (word-boundary safe) ---
+    # Ownership/account indicators ONLY (no "trade", no "open", etc.)
+    personal_words = ["my", "mine", "me", "account", "portfolio", "wallet"]
+    is_personal = any(_has_word(msg, w) for w in personal_words)
+
+    educational_phrases = [
+        "what is", "meaning of", "define", "definition of", "explain",
+        "how to", "how do i", "guide", "tutorial", "steps", "help me"
+    ]
+    is_educational = any(_has_phrase(msg, ph) for ph in educational_phrases)
+
+    # Educational + not personal + no explicit id/date => SKIP DB
+    if is_educational and not is_personal and not found_id and not date_filter:
+        logger.info(" [0] INTENT: Educational (non-personal). Skipping DB.")
+        return None
 
     # --- 4. ROUTING PRIORITY ---
-    if any(word in msg for word in ["p&l", "balance", "profit"]):
+    if any(w in msg for w in ["p&l", "pnl", "balance", "profit", "loss"]):
         coll_name = "user"
-    elif found_id or any(word in msg for word in ["payment", "deposit", "withdraw", "request"]):
+
+    elif found_id or any(w in msg for w in ["payment", "deposit", "withdraw", "request"]):
         coll_name = "paymentRequest"
-    elif any(word in msg for word in ["position", "holding", "open"]):
+
+    elif is_personal and any(w in msg for w in ["position", "holding", "holdings", "open position", "open positions"]):
         coll_name = "position"
-    elif any(word in msg for word in ["trade", "order"]):
+
+    elif is_personal and any(w in msg for w in ["trade", "trades", "order", "orders", "open trade", "open trades"]):
         coll_name = "trade"
-    elif any(word in msg for word in ["alert", "notification"]):
+
+    elif any(w in msg for w in ["alert", "notification"]):
         coll_name = "alerts"
+
     else:
-        coll_name = "transaction"
+        # Prevent random DB hits for non-personal queries
+        coll_name = "transaction" if (is_personal or found_id or date_filter) else None
+
+    if not coll_name:
+        logger.info(" [0.1] ROUTE: No DB route selected. Skipping DB.")
+        return None
 
     # --- 5. SECURE DATABASE QUERY ---
     try:
@@ -387,28 +451,26 @@ def query_user_db(user_msg: str, user_id: str):
             query_filter = {"userId": ObjectId(user_id)}
 
         if found_id:
-            query_filter["$or"] = [
-                {"transactionId": found_id},
-                {"_id": ObjectId(found_id) if len(found_id) == 24 else None}
-            ]
-        
+            ors = [{"transactionId": found_id}]
+            if len(found_id) == 24:
+                try:
+                    ors.append({"_id": ObjectId(found_id)})
+                except Exception:
+                    pass
+            query_filter["$or"] = ors
+
         if date_filter:
-            # Most of your collections use 'createdAt' for time-based filtering
             query_filter["createdAt"] = date_filter
 
         if is_count_query:
             count = db[coll_name].count_documents(query_filter)
             return {"data": count, "collection": coll_name, "type": "count"}
 
-        # --- 6. SMART LIMITING ---
-        # Increased limit to 100 for date ranges to show the full period requested
-        if date_filter:
-            limit_val = 100 
-        else:
-            limit_val = 1 if (is_last_query or found_id or coll_name == "user") else 5
-        
-        # We sort by createdAt descending to show newest data first
-        results = list(db[coll_name].find(query_filter).sort("createdAt", -1).limit(limit_val))
+        limit_val = 100 if date_filter else (1 if (is_last_query or found_id or coll_name == "user") else 5)
+
+        results = list(
+            db[coll_name].find(query_filter).sort("createdAt", -1).limit(limit_val)
+        )
         return {"data": results, "collection": coll_name} if results else None
 
     except Exception as e:
@@ -507,6 +569,126 @@ def format_db_results(data_list, collection_name: str, start_date=None, end_date
     
     return "".join(html_parts)
 
+def query_superadmin_db(user_msg: str):
+    logger.info(f" [👑] SUPERADMIN_DB_CHECK: Processing request")
+    msg = user_msg.lower()
+    coll_name = None
+    
+    # --- 1. DATE RANGE DETECTION ---
+    date_pattern = r'(\d{1,2}[/-]\d{1,2}[/-]\d{4})'
+    found_dates = re.findall(date_pattern, user_msg)
+    
+    date_filter = None
+    if len(found_dates) >= 2:
+        try:
+            start_dt = datetime.strptime(found_dates[0].replace('-', '/'), "%d/%m/%Y")
+            end_base = datetime.strptime(found_dates[1].replace('-', '/'), "%d/%m/%Y")
+            end_dt = datetime.combine(end_base, datetime_time.max) 
+            date_filter = {"$gte": start_dt, "$lte": end_dt}
+        except Exception as e:
+            logger.error(f" [!] DATE_PARSE_ERROR: {e}")
+
+    # --- 2. USER SEARCH DETECTION ---
+    # If the Super Admin types a name, we search for that user
+    name_match = re.search(r'user\s+([a-zA-Z]+)', msg)
+    target_user_name = name_match.group(1) if name_match else None
+
+    # --- 3. ROUTING PRIORITY ---
+    # Same as user, but we default to broader categories
+    if any(word in msg for word in ["p&l", "balance", "profit"]):
+        coll_name = "user" # Super Admin sees all users' balances
+    elif any(word in msg for word in ["payment", "deposit", "withdraw"]):
+        coll_name = "paymentRequest"
+    elif any(word in msg for word in ["position", "holding", "open"]):
+        coll_name = "position"
+    elif any(word in msg for word in ["trade", "order"]):
+        coll_name = "trade"
+    else:
+        coll_name = "transaction"
+
+    # --- 4. SECURE SUPERADMIN QUERY ---
+    try:
+        query_filter = {} # START WITH EMPTY FILTER (Show All Users)
+
+        # If searching for a specific user name
+        if target_user_name:
+            query_filter["userName"] = {"$regex": target_user_name, "$options": "i"}
+        
+        if date_filter:
+            query_filter["createdAt"] = date_filter
+
+        # --- 5. DATA FETCHING ---
+        # For Super Admin, we don't limit to 5. We fetch all relevant records (up to 500)
+        # then let our formatting function handle the pagination (5 at a time).
+        
+        sort_field = "createdAt"
+        # If it's a position report, prioritize CFM (Holding Margin) as requested
+        if coll_name == "position":
+            sort_field = "holdingMargin" 
+
+        results = list(db[coll_name].find(query_filter).sort(sort_field, -1).limit(500))
+        
+        return {
+            "data": results, 
+            "collection": coll_name, 
+            "total_count": len(results),
+            "is_superadmin": True
+        } if results else None
+
+    except Exception as e:
+        logger.error(f" [!] SUPERADMIN_DB_ERROR: {e}")
+        return None
+        
+def format_superadmin_interactive(data_list, collection_name, page=1):
+    per_page = 5
+    total_count = len(data_list)
+    start_idx = (page - 1) * per_page
+    current_batch = data_list[start_idx : start_idx + per_page]
+    
+    # 1. Start Context & Head
+    html = ["<context>", "<head>"]
+    html.append(f"<div style='border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 10px;'>")
+    html.append(f"<span style='font-size: 12px; color: #666;'>SYSTEM OVERVIEW</span><br>")
+    html.append(f"<b style='font-size: 18px; color: #1a73e8;'>{total_count} Total {collection_name.upper()}s</b>")
+    html.append("</div>")
+    html.append("</head>")
+
+    # 2. Generate the 5 Interactive Buttons
+    html.append("<div class='button-group'>")
+    for doc in current_batch:
+        # Determine P&L color logic
+        pnl = doc.get("profitLoss", 0)
+        pnl_color = "#28a745" if pnl >= 0 else "#dc3545"
+        
+        html.append(f"""
+            <div class='superadmin-card' 
+                 onclick='showItemDetail("{doc.get("_id")}")'
+                 style='display: flex; justify-content: space-between; padding: 12px; margin-bottom: 8px; background: #fff; border: 1px solid #ddd; border-radius: 10px; cursor: pointer; transition: 0.3s;'>
+                <div style='text-align: left;'>
+                    <b style='font-size: 14px;'>{doc.get("userName", "User")}</b><br>
+                    <small style='color: #555;'>{doc.get("symbolName")}</small>
+                </div>
+                <div style='text-align: right;'>
+                    <b style='color: {pnl_color};'>{pnl}</b><br>
+                    <small style='color: #999;'>Qty: {doc.get("totalQuantity")}</small>
+                </div>
+            </div>
+        """)
+    html.append("</div>")
+
+    # 3. Pagination Footer
+    if start_idx + per_page < total_count:
+        html.append(f"""
+            <button class='next-btn' 
+                    onclick='loadNextPage({page + 1})'
+                    style='width: 100%; padding: 12px; background: #007bff; color: white; border: none; border-radius: 8px; font-weight: bold; margin-top: 10px;'>
+                View Next 5 Items ❯
+            </button>
+        """)
+    
+    html.append("</context>")
+    return "".join(html)
+
 def llm_fallback(user_msg: str, user_id: str) -> str:
     logger.info(f"--- Starting LLM Fallback Flow for User: {user_id} ---")
 
@@ -555,6 +737,45 @@ def llm_fallback(user_msg: str, user_id: str) -> str:
     raw_support = _call_llm_internal(SUPPORT_SYSTEM, user_msg)
     cleaned = _clean_llm_text(raw_support)
     return _enforce_medium_length(cleaned, 80, 130)
+
+def superadmin_llm_fallback(user_msg: str, pro_id: str) -> str:
+    logger.info(f"--- Starting SUPERADMIN LLM Flow for {pro_id} ---")
+
+    # 1. Greetings
+    if _is_greeting(user_msg):
+        return "Hello 👑 Super Admin. What would you like to review today?"
+
+    # 2. SUPERADMIN DB CHECK
+    db_res = query_superadmin_db(user_msg)
+    if db_res:
+        logger.info(f" STEP: Superadmin data found in {db_res['collection']}")
+
+        html = format_superadmin_interactive(
+            db_res["data"],
+            db_res["collection"],
+            page=1
+        )
+        return html
+
+    # 3. FAQ (optional – usually skip for SA)
+    faq_answer = faq_reply(user_msg)
+    if faq_answer:
+        return faq_answer
+
+    # 4. Guard
+    ga = guard_action(user_msg)
+    if ga["action"] == "refuse":
+        return ga["message"]
+
+    # 5. LLM (broader permissions than normal user)
+    SYSTEM = (
+        "You are an internal system assistant for a trading platform Super Admin. "
+        "You may discuss users, balances, trades, payments, audits, and reports. "
+        "Be concise, accurate, and structured. No emojis."
+    )
+
+    raw = _call_llm_internal(SYSTEM, user_msg)
+    return _clean_llm_text(raw)
     
 # ────────────────────── DB upserts ──────────────────────
 def ensure_bot_user() -> SCUser:
@@ -604,9 +825,6 @@ def resolve_owner_superadmin_id(user_or_master_id: ObjectId) -> Optional[ObjectI
 
 # (duplicate imports remain, function names unchanged)
 from datetime import datetime, timezone
-
-from bson import ObjectId
-
 
 def _to_oid(x):
     if isinstance(x, ObjectId):
@@ -665,8 +883,6 @@ def upsert_support_user_from_jwt() -> SCUser:
 # (duplicate imports remain, function names unchanged)
 from datetime import datetime, timezone
 from typing import Optional
-
-from bson import ObjectId
 
 # assumes these are defined in your db.py and imported here
 # from src.db import PRO_DB, USER_ROLE_ID
@@ -798,6 +1014,31 @@ def ensure_chatroom_for_pro(pro_id: ObjectId) -> Optional[Chatroom]:
 
     return None
 
+def ensure_staff_bot_room(pro_id: ObjectId) -> Chatroom:
+    now = datetime.now(timezone.utc)
+
+    room = Chatroom.objects(
+        user_id=pro_id,
+        room_type="staff_bot",
+        status="open",
+    ).modify(
+        upsert=True,
+        new=True,
+        set__updated_time=now,
+
+        set_on_insert__created_time=now,
+        set_on_insert__user_id=pro_id,
+        set_on_insert__room_type="staff_bot",
+        set_on_insert__title="My Bot Chat",
+        set_on_insert__status="open",
+
+        set_on_insert__is_user_active=False,
+        set_on_insert__is_superadmin_active=False,
+        set_on_insert__is_owner_active=False,
+        set_on_insert__is_admin_active=False,
+    )
+
+    return room
 
 # ────────────────────── Message utils ──────────────────────
 def repeated_user_questions(
@@ -1662,6 +1903,8 @@ __all__ = [
     "generate_bot_reply_lines",
     "schedule_bot_reply_after_2m",
     "_utc_day_key",
-    "_can_ask_and_inc"
+    "_can_ask_and_inc",
+    "ensure_staff_bot_room",
+    "superadmin_llm_fallback"
     
 ]

@@ -46,7 +46,7 @@ from src.helper import (_oid, cache_get, cache_set, chatroom_with_messages,
                         msg_dict, now_ist_iso, repeated_user_questions,
                         room_add, room_broadcast, room_remove,
                         save_demo_message, upsert_support_user_from_jwt,is_any_staff_present,cancel_pending_bot_reply,generate_bot_reply_lines,schedule_bot_reply_after_2m,
-                        _can_ask_and_inc,_utc_day_key)
+                        _can_ask_and_inc,ensure_staff_bot_room,superadmin_llm_fallback)
 # materializers (analytics)
 from src.helpers.build_service import (materialize_admins_analysis,
                                        materialize_masters_analysis,
@@ -608,6 +608,15 @@ def create_app() -> Flask:
             qs_chatroom_id = request.args.get("chatroom_id")
             qs_child_user_id = request.args.get("child_user_id")
 
+            # ✅ NEW: ensure superadmin personal bot room exists (created once)
+            # (requires Chatroom.room_type support + ensure_staff_bot_room function)
+            try:
+                if is_superadmin:
+                    ensure_staff_bot_room(pro_id)
+            except Exception as e:
+                # do not block websocket if this fails; list will just omit it
+                 print("ensure_staff_bot_room failed:", repr(e))
+
             if is_user:
                 chat = ensure_chatroom_for_pro(pro_id)
                 chat_id = str(chat.id)
@@ -633,34 +642,44 @@ def create_app() -> Flask:
                         last_activity["ts"] = time.time()
                         return
 
-                    if is_superadmin:
-                        if picked.owner_id and picked.owner_id != pro_id:
-                            ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
-                            last_activity["ts"] = time.time()
-                            return
-                        if (
-                            not picked.owner_id
-                            and picked.super_admin_id
-                            and picked.super_admin_id != pro_id
-                        ):
+                    # ✅ NEW: allow superadmin to open ONLY own staff_bot room (if selected)
+                    picked_room_type = (getattr(picked, "room_type", None) or "support")
+                    is_staff_bot_room = (picked_room_type == "staff_bot")
+
+                    if is_staff_bot_room:
+                        if str(getattr(picked, "user_id", "")) != str(pro_id):
                             ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
                             last_activity["ts"] = time.time()
                             return
                     else:
-                        if is_admin:
-                            if picked.admin_id and picked.admin_id != pro_id:
+                        if is_superadmin:
+                            if picked.owner_id and picked.owner_id != pro_id:
                                 ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
                                 last_activity["ts"] = time.time()
                                 return
-                        elif is_master:
-                            if picked.super_admin_id and picked.super_admin_id != pro_id:
+                            if (
+                                not picked.owner_id
+                                and picked.super_admin_id
+                                and picked.super_admin_id != pro_id
+                            ):
                                 ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
                                 last_activity["ts"] = time.time()
                                 return
                         else:
-                            ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
-                            last_activity["ts"] = time.time()
-                            return
+                            if is_admin:
+                                if picked.admin_id and picked.admin_id != pro_id:
+                                    ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
+                                    last_activity["ts"] = time.time()
+                                    return
+                            elif is_master:
+                                if picked.super_admin_id and picked.super_admin_id != pro_id:
+                                    ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
+                                    last_activity["ts"] = time.time()
+                                    return
+                            else:
+                                ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
+                                last_activity["ts"] = time.time()
+                                return
 
                     chat = picked
                     chat_id = str(chat.id)
@@ -676,6 +695,8 @@ def create_app() -> Flask:
                 # --- open (or create) by child_user_id ---
                 elif qs_child_user_id:
                     chat = ensure_chatroom_for_pro(_oid(qs_child_user_id))
+
+                    # ✅ NEW: staff_bot room is not created via child_user_id path; keep existing auth
                     if is_superadmin:
                         if chat.owner_id and chat.owner_id != pro_id:
                             ws.send(json.dumps({"type": "error", "error": "forbidden_child_room"}))
@@ -732,20 +753,34 @@ def create_app() -> Flask:
                         "is_admin_active",
                         "updated_time",
                         "created_time",
+                        # ✅ NEW: include room_type if exists; safe even if not on older docs
+                        "room_type",
                     )
 
+                    # ✅ NEW: include superadmin staff_bot room in listing (without removing existing logic)
                     if is_superadmin:
-                        rooms = (
-                            Chatroom.objects(owner_id=pro_id)
-                            .only(*base_fields)
-                            .order_by("-updated_time")
-                        )
-                        if rooms.count() == 0:
+                        try:
+                            from mongoengine.queryset.visitor import Q
                             rooms = (
-                                Chatroom.objects(super_admin_id=pro_id)
+                                Chatroom.objects(
+                                    Q(owner_id=pro_id) | Q(super_admin_id=pro_id) | Q(user_id=pro_id, room_type="staff_bot")
+                                )
                                 .only(*base_fields)
                                 .order_by("-updated_time")
                             )
+                        except Exception:
+                            # fallback to your old logic if Q is not available
+                            rooms = (
+                                Chatroom.objects(owner_id=pro_id)
+                                .only(*base_fields)
+                                .order_by("-updated_time")
+                            )
+                            if rooms.count() == 0:
+                                rooms = (
+                                    Chatroom.objects(super_admin_id=pro_id)
+                                    .only(*base_fields)
+                                    .order_by("-updated_time")
+                                )
                     elif is_admin:
                         rooms = (
                             Chatroom.objects(admin_id=pro_id)
@@ -803,6 +838,8 @@ def create_app() -> Flask:
                                 "is_admin_active": bool(getattr(r, "is_admin_active", False)),
                                 "updated_time": _iso(getattr(r, "updated_time", None) or getattr(r, "created_time", None)),
                                 "user": meta_by_userid.get(str(getattr(r, "user_id", "")), {"name": "", "userName": "", "phone": ""}),
+                                # ✅ NEW: expose room_type to frontend for labeling (optional)
+                                "room_type": (getattr(r, "room_type", None) or "support"),
                             }
                             for r in rooms_list
                         ],
@@ -844,34 +881,44 @@ def create_app() -> Flask:
                         last_activity["ts"] = time.time()
                         continue
 
-                    if is_superadmin:
-                        if picked.owner_id and picked.owner_id != pro_id:
-                            ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
-                            last_activity["ts"] = time.time()
-                            return
-                        if (
-                            not picked.owner_id
-                            and picked.super_admin_id
-                            and picked.super_admin_id != pro_id
-                        ):
+                    # ✅ NEW: allow superadmin to select ONLY own staff_bot room
+                    picked_room_type = (getattr(picked, "room_type", None) or "support")
+                    is_staff_bot_room = (picked_room_type == "staff_bot")
+
+                    if is_staff_bot_room:
+                        if str(getattr(picked, "user_id", "")) != str(pro_id):
                             ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
                             last_activity["ts"] = time.time()
                             return
                     else:
-                        if is_admin:
-                            if picked.admin_id and picked.admin_id != pro_id:
+                        if is_superadmin:
+                            if picked.owner_id and picked.owner_id != pro_id:
                                 ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
                                 last_activity["ts"] = time.time()
                                 return
-                        elif is_master:
-                            if picked.super_admin_id and picked.super_admin_id != pro_id:
+                            if (
+                                not picked.owner_id
+                                and picked.super_admin_id
+                                and picked.super_admin_id != pro_id
+                            ):
                                 ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
                                 last_activity["ts"] = time.time()
                                 return
                         else:
-                            ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
-                            last_activity["ts"] = time.time()
-                            return
+                            if is_admin:
+                                if picked.admin_id and picked.admin_id != pro_id:
+                                    ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
+                                    last_activity["ts"] = time.time()
+                                    return
+                            elif is_master:
+                                if picked.super_admin_id and picked.super_admin_id != pro_id:
+                                    ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
+                                    last_activity["ts"] = time.time()
+                                    return
+                            else:
+                                ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
+                                last_activity["ts"] = time.time()
+                                return
 
                     if chat and chat_id:
                         try:
@@ -902,6 +949,10 @@ def create_app() -> Flask:
                         ws.send(json.dumps({"type": "error", "error": "empty_message"}))
                         last_activity["ts"] = time.time()
                         continue
+
+                    # ✅ NEW: detect staff-bot room (superadmin personal room)
+                    room_type = (getattr(chat, "room_type", None) or "support")
+                    is_staff_bot_room = (room_type == "staff_bot")
 
                     # ✅ DAILY LIMIT (ONLY FOR USER) - assumes you already have _can_ask_and_inc + WS_DAILY_USER_LIMIT defined
                     if bucket_role == "user":
@@ -953,7 +1004,37 @@ def create_app() -> Flask:
                         },
                     )
 
-                    # ✅ YOUR BOT/STAFF LOGIC (unchanged)
+                    # ✅ NEW: if staff is chatting in staff_bot room, allow bot reply (do NOT mark engaged/cancel)
+                    if is_superadmin and is_staff_bot_room:
+                        try:
+                            bot_reply = superadmin_llm_fallback(text, str(pro_id))
+                        except Exception as e:
+                            logger.error(f"[SUPERADMIN BOT ERROR] {e}")
+                            bot_reply = "An internal error occurred while processing this request."
+
+                        if bot_reply:
+                            bot = ensure_bot_user()
+                            m_bot = Message(
+                                chatroom_id=chat.id,
+                                message_by=bot.id,
+                                message=bot_reply,
+                                is_file=False,
+                                is_bot=True,
+                            ).save()
+
+                            room_broadcast(
+                                chat_id,
+                                {
+                                    "type": "message",
+                                    "from": "bot",
+                                    "message": bot_reply,
+                                    "message_id": str(m_bot.id),
+                                    "chat_id": chat_id,
+                                    "created_time": m_bot.created_time.isoformat(),
+                                },
+                            )
+                        continue
+                    # ✅ YOUR BOT/STAFF LOGIC (unchanged) for normal support rooms
                     if bucket_role != "user":
                         STAFF_ENGAGED[chat_id] = True
                         cancel_pending_bot_reply(chat_id)
@@ -965,10 +1046,10 @@ def create_app() -> Flask:
                     if not engaged:
                         # Pass the user_id so the bot can look up trades/balance
                         user_id_str = str(su.user_id)
-                        reply_lines = generate_bot_reply_lines(text, user_id_str) # <--- Added user_id
-                        
+                        reply_lines = generate_bot_reply_lines(text, user_id_str)  # <--- Added user_id
+
                         if reply_lines:
-                            bot_text = "\n".join(reply_lines) # Now safe because reply_lines is a list
+                            bot_text = "\n".join(reply_lines)  # Now safe because reply_lines is a list
                             bot = ensure_bot_user()
                             m_bot = Message(
                                 chatroom_id=chat.id,

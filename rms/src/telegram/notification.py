@@ -535,38 +535,80 @@ def get_hierarchy_user_ids(client_user_id: str) -> List[dict]:
 # TRADE NOTIFICATION CORE
 # ============================================================
 
-async def send_message_to_chats(message: str, chat_ids: List[int], bot):
+async def send_message_to_chats(message: str, chat_id: int, bot, prefix_role: str = None):
     """
-    Sends the trade notification to a list of specific chat IDs, dynamically
-    prepending the receiver's subscribed role for context.
+    Sends the final message with the bold ROLE header.
     """
-    if not chat_ids:
+    header = f"<b>To: {prefix_role}</b>\n" if prefix_role else ""
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"{header}{message}",
+            parse_mode="HTML"
+        )
+        logger.info(f"✅ Notification sent to {prefix_role}")
+    except Exception as e:
+        logger.error(f"❌ Telegram Send Error for {chat_id}: {e}")
+
+async def handle_trade_update(change: dict, bot_instance):
+    """
+    Formats notification to match pretty style and adds Quantity field.
+    """
+    doc = change.get("fullDocument")
+    if not doc:
         return
-        
-    for chat_id in chat_ids:
-        # 1. Find the role associated with this specific chat_id
-        subscription_doc = notification.find_one({"chat_ids": chat_id})
-        
-        # 2. Determine the role and create a role prefix
-        if subscription_doc and subscription_doc.get('role'):
-            receiver_role = subscription_doc['role'].upper()
+
+    # 1. Extract Fields from Document
+    user_id_str = str(doc.get("userId", ""))
+    symbol = doc.get("symbolName", "N/A")
+    quantity = doc.get("quantity", 0)  # 🆕 Added Quantity
+    price = doc.get("price", 0)
+    order_type = doc.get("orderType", "N/A")
+    trade_type = doc.get("tradeType", "N/A")
+    
+    # Determine the status for the bold title
+    status_raw = doc.get("status", "Executed")
+    title = f"Trade {status_raw.capitalize()}"
+
+    # 2. Get subscribed parents (IDs and Roles)
+    parent_subscriptions = await get_subscribed_parents(user_id_str)
+    if not parent_subscriptions:
+        logger.info(f"No subscribers for client {user_id_str}")
+        return
+
+    # 3. Look up Client Name
+    client_name = user_id_str
+    try:
+        client_doc = await asyncio.to_thread(users.find_one, {"_id": ObjectId(user_id_str)})
+        if client_doc:
+            client_name = client_doc.get("userName") or client_doc.get("name") or user_id_str
+    except Exception as e:
+        logger.error(f"⚠️ Client name lookup failed: {e}")
+
+    # 4. Construct the Body (Matching image_026ae3.png)
+    # Note: Labels and values are NOT bolded for the 'pretty' look.
+    body = (
+        f"🔔 <b>{html.escape(str(title))}</b>\n"
+        f"Client Name: {html.escape(str(client_name))}\n"
+        f"Symbol: {html.escape(str(symbol))}\n"
+        f"Quantity: {quantity}\n"
+        f"Price: {price}\n"
+        f"Order Type: {html.escape(str(order_type))}\n"
+        f"Trade Type: {html.escape(str(trade_type))}"
+    )
+
+    # 5. Add Footer Message (Upper Case, with blank line spacing)
+    footer_text = doc.get("comment") or doc.get("message")
+    if footer_text:
+        body += f"\n\n{html.escape(str(footer_text)).upper()}"
+
+    # 6. Send to each parent with dynamic "To: ROLE" bold header
+    for item in parent_subscriptions:
+        if isinstance(item, (tuple, list)):
+            chat_id, role = item[0], item[1]
         else:
-            receiver_role = "UNKNOWN SUBSCRIBER"
-            
-        # 3. Prepend the role to the original message (using BOLD for emphasis)
-        role_prefix = f"<b>To: {html.escape(receiver_role)}</b>\n"
-        final_message = role_prefix + message
-        
-        try:
-            await bot.send_message(
-                chat_id=chat_id, 
-                text=final_message, 
-                parse_mode="HTML"
-            )
-            logger.info(f"Trade notification sent to chat_id {chat_id} as {receiver_role}.")
-        except Exception as e:
-            logger.error(f"Error sending trade notification to {chat_id}: {e}")
+            chat_id = item
+            sub_doc = await asyncio.to_thread(notification.find_one, {"chat_ids": chat_id})
+            role = sub_doc.get("role", "ADMIN").upper() if sub_doc else "ADMIN"
 
-
-
-
+        await send_message_to_chats(body, chat_id, bot_instance, role)
