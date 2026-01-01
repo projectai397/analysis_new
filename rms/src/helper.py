@@ -331,13 +331,14 @@ def _call_llm_internal(system_prompt: str, user_msg: str) -> str:
     
 from datetime import datetime, time as datetime_time # Import alias to avoid conflict
 
+IST = timezone(timedelta(hours=5, minutes=30))
+
 def _extract_text(user_msg) -> str:
     """
-    Accepts:
-      - plain string ("how to trade")
-      - JSON string ('{"type":"message","text":"how to trade"}')
-      - dict ({"type":"message","text":"how to trade"})
-    Returns extracted text if present, else the original string.
+    Supports:
+      - dict payload: {"type":"message","text":"..."}
+      - JSON string payload: '{"type":"message","text":"..."}'
+      - plain string: "..."
     """
     if isinstance(user_msg, dict):
         return str(user_msg.get("text") or "").strip()
@@ -349,7 +350,6 @@ def _extract_text(user_msg) -> str:
     if not s:
         return s
 
-    # Try parse JSON string safely
     if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
         try:
             obj = json.loads(s)
@@ -361,37 +361,98 @@ def _extract_text(user_msg) -> str:
     return s
 
 def _has_word(msg: str, word: str) -> bool:
-    # exact word match (prevents "me" matching "message")
     return re.search(rf"\b{re.escape(word)}\b", msg) is not None
 
-def _has_phrase(msg: str, phrase: str) -> bool:
-    # phrase match with normalization
-    return phrase in msg
+def _parse_ddmmyyyy(s: str) -> datetime:
+    s = s.replace("-", "/")
+    return datetime.strptime(s, "%d/%m/%Y")
 
+def _day_bounds_ist(dt_ist: datetime):
+    start = dt_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = dt_ist.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return start, end
+
+def _ist_range_to_utc_filter(start_ist: datetime, end_ist: datetime):
+    # If Mongo createdAt is stored in UTC (recommended), query in UTC
+    start_utc = start_ist.astimezone(timezone.utc)
+    end_utc = end_ist.astimezone(timezone.utc)
+    return {"$gte": start_utc, "$lte": end_utc}
+
+def _build_createdat_filter_and_label(text: str):
+    """
+    Returns: (date_filter_or_None, label_or_None)
+    Handles:
+      - range: 27/12/2025 to 31/12/2025 (two dates anywhere in msg)
+      - single day: 27/12/2025
+      - relative: today/yesterday/this week/last week/this month/last month
+    """
+    msg = (text or "").lower().strip()
+
+    # Explicit date(s)
+    date_pattern = r'(\d{1,2}[/-]\d{1,2}[/-]\d{4})'
+    found_dates = re.findall(date_pattern, msg)
+
+    if len(found_dates) >= 2:
+        start_base = _parse_ddmmyyyy(found_dates[0]).replace(tzinfo=IST)
+        end_base = _parse_ddmmyyyy(found_dates[1]).replace(tzinfo=IST)
+        start_ist = start_base.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_ist = datetime.combine(end_base.date(), datetime_time.max, tzinfo=IST)
+        return _ist_range_to_utc_filter(start_ist, end_ist), f"{found_dates[0]} to {found_dates[1]}"
+
+    if len(found_dates) == 1:
+        base_ist = _parse_ddmmyyyy(found_dates[0]).replace(tzinfo=IST)
+        s_ist, e_ist = _day_bounds_ist(base_ist)
+        return _ist_range_to_utc_filter(s_ist, e_ist), found_dates[0]
+
+    # Relative date phrases
+    now_ist = datetime.now(IST)
+
+    if "today" in msg:
+        s_ist, e_ist = _day_bounds_ist(now_ist)
+        return _ist_range_to_utc_filter(s_ist, e_ist), "today"
+
+    if "yesterday" in msg:
+        s_ist, e_ist = _day_bounds_ist(now_ist - timedelta(days=1))
+        return _ist_range_to_utc_filter(s_ist, e_ist), "yesterday"
+
+    if "this week" in msg:
+        start_of_week = (now_ist - timedelta(days=now_ist.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        end_ist = now_ist.replace(hour=23, minute=59, second=59, microsecond=999999)
+        return _ist_range_to_utc_filter(start_of_week, end_ist), "this week"
+
+    if "last week" in msg:
+        start_this_week = (now_ist - timedelta(days=now_ist.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        start_last_week = start_this_week - timedelta(days=7)
+        end_last_week = start_this_week - timedelta(microseconds=1)
+        return _ist_range_to_utc_filter(start_last_week, end_last_week), "last week"
+
+    if "this month" in msg:
+        start_month = now_ist.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end_ist = now_ist.replace(hour=23, minute=59, second=59, microsecond=999999)
+        return _ist_range_to_utc_filter(start_month, end_ist), "this month"
+
+    if "last month" in msg:
+        first_this_month = now_ist.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        last_month_end = first_this_month - timedelta(microseconds=1)
+        last_month_start = last_month_end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        return _ist_range_to_utc_filter(last_month_start, last_month_end), "last month"
+
+    return None, None
+
+
+# ----------------------------
+# DB Query (UPDATED)
+# ----------------------------
 def query_user_db(user_msg, user_id: str):
     logger.info(f" [1] DB_CHECK: Starting for user: {user_id}")
 
-    # 0) Extract actual user text (critical)
     text = _extract_text(user_msg)
     msg = text.lower().strip()
-    coll_name = None
 
-    # --- 1. DATE RANGE DETECTION ---
-    date_pattern = r'(\d{1,2}[/-]\d{1,2}[/-]\d{4})'
-    found_dates = re.findall(date_pattern, text)
+    # Date filter supports: today/yesterday/this week/this month/last week/last month/single date/range
+    date_filter, date_label = _build_createdat_filter_and_label(text)
 
-    date_filter = None
-    if len(found_dates) >= 2:
-        try:
-            start_dt = datetime.strptime(found_dates[0].replace('-', '/'), "%d/%m/%Y")
-            end_base = datetime.strptime(found_dates[1].replace('-', '/'), "%d/%m/%Y")
-            end_dt = datetime.combine(end_base, datetime_time.max)
-            date_filter = {"$gte": start_dt, "$lte": end_dt}
-            logger.info(f" [1.1] DATE_FILTER_MATCH: {start_dt} to {end_dt}")
-        except Exception as e:
-            logger.error(f" [1.2] DATE_PARSE_ERROR: {e}")
-
-    # --- 2. ID DETECTION ---
+    # ID detection
     id_pattern = (
         r'[a-zA-Z0-9]{8}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{12}'
         r'|[a-zA-Z0-9]{20,40}'
@@ -399,51 +460,64 @@ def query_user_db(user_msg, user_id: str):
     id_match = re.search(id_pattern, text)
     found_id = id_match.group() if id_match else None
 
-    # --- 3. INTENT FLAGS ---
-    is_last_query  = any(w in msg for w in ["last", "latest", "recent"])
+    # Intent flags
+    is_last_query = any(w in msg for w in ["last", "latest", "recent"])
     is_count_query = any(w in msg for w in ["how many", "count", "total"])
 
-    # --- 3.5 PERSONAL vs EDUCATIONAL (word-boundary safe) ---
-    # Ownership/account indicators ONLY (no "trade", no "open", etc.)
-    personal_words = ["my", "mine", "me", "account", "portfolio", "wallet"]
-    is_personal = any(_has_word(msg, w) for w in personal_words)
-
+    # Educational vs personal
     educational_phrases = [
         "what is", "meaning of", "define", "definition of", "explain",
         "how to", "how do i", "guide", "tutorial", "steps", "help me"
     ]
-    is_educational = any(_has_phrase(msg, ph) for ph in educational_phrases)
+    is_educational = any(ph in msg for ph in educational_phrases)
 
-    # Educational + not personal + no explicit id/date => SKIP DB
-    if is_educational and not is_personal and not found_id and not date_filter:
+    personal_words = ["my", "mine", "me", "account", "portfolio", "wallet"]
+    is_personal = any(_has_word(msg, w) for w in personal_words)
+
+    # Data nouns (used for implicit DB intent when date is present)
+    data_nouns = [
+        "trade", "trades", "order", "orders", "position", "positions", "holding", "holdings",
+        "p&l", "pnl", "balance", "transaction", "transactions", "deposit", "withdraw", "payment"
+    ]
+    has_data_noun = any(w in msg for w in data_nouns)
+
+    # If user gave a time window + asked for a data noun, treat as account-data even without "my"
+    implicit_personal = bool(date_filter and has_data_noun)
+
+    # If it's educational and not personal and not implicit and no ID, do not hit DB
+    # e.g. "how to trade", "what is pnl"
+    if is_educational and not is_personal and not implicit_personal and not found_id:
         logger.info(" [0] INTENT: Educational (non-personal). Skipping DB.")
         return None
 
-    # --- 4. ROUTING PRIORITY ---
+    # Routing priority
+    coll_name = None
+
     if any(w in msg for w in ["p&l", "pnl", "balance", "profit", "loss"]):
         coll_name = "user"
 
     elif found_id or any(w in msg for w in ["payment", "deposit", "withdraw", "request"]):
         coll_name = "paymentRequest"
 
-    elif is_personal and any(w in msg for w in ["position", "holding", "holdings", "open position", "open positions"]):
+    # "open" strongly correlates with positions; keep this before trade routing
+    elif (is_personal or implicit_personal) and any(w in msg for w in ["position", "positions", "holding", "holdings", "open"]):
         coll_name = "position"
 
-    elif is_personal and any(w in msg for w in ["trade", "trades", "order", "orders", "open trade", "open trades"]):
+    elif (is_personal or implicit_personal) and any(w in msg for w in ["trade", "trades", "order", "orders"]):
         coll_name = "trade"
 
     elif any(w in msg for w in ["alert", "notification"]):
         coll_name = "alerts"
 
     else:
-        # Prevent random DB hits for non-personal queries
-        coll_name = "transaction" if (is_personal or found_id or date_filter) else None
+        # Avoid random DB hits; only query if personal or explicit time/id present
+        coll_name = "transaction" if (is_personal or implicit_personal or found_id or date_filter) else None
 
     if not coll_name:
         logger.info(" [0.1] ROUTE: No DB route selected. Skipping DB.")
         return None
 
-    # --- 5. SECURE DATABASE QUERY ---
+    # DB query
     try:
         if coll_name == "user":
             query_filter = {"_id": ObjectId(user_id)}
@@ -464,109 +538,161 @@ def query_user_db(user_msg, user_id: str):
 
         if is_count_query:
             count = db[coll_name].count_documents(query_filter)
-            return {"data": count, "collection": coll_name, "type": "count"}
+            return {"data": count, "collection": coll_name, "type": "count", "period": date_label}
 
+        # Limit
         limit_val = 100 if date_filter else (1 if (is_last_query or found_id or coll_name == "user") else 5)
 
-        results = list(
-            db[coll_name].find(query_filter).sort("createdAt", -1).limit(limit_val)
-        )
-        return {"data": results, "collection": coll_name} if results else None
+        results = list(db[coll_name].find(query_filter).sort("createdAt", -1).limit(limit_val))
+
+        # ----------------------------
+        # KEY FIX: return empty list for valid record lookups with explicit time window
+        # so we don't fall back to FAQ/guard when there are zero rows.
+        # ----------------------------
+        is_record_lookup = coll_name in {"trade", "position", "transaction", "paymentRequest"}
+        has_explicit_time = bool(date_filter)  # includes single-date and relative (today/yesterday/etc.)
+
+        if results:
+            return {"data": results, "collection": coll_name, "period": date_label}
+
+        if is_record_lookup and has_explicit_time:
+            return {"data": [], "collection": coll_name, "period": date_label}
+
+        return None
 
     except Exception as e:
         logger.error(f" [1.7] DB_CHECK_ERROR: {e}")
         return None
-    
+
+
+# ----------------------------
+# Formatting (UPDATED: explicit "no trades on <date>")
+# ----------------------------
 def format_db_results(data_list, collection_name: str, start_date=None, end_date=None) -> str:
-    # 1. Handle Empty or Count Results
+    # If user asked a valid period but there are 0 records, say it explicitly
+    if isinstance(data_list, list) and len(data_list) == 0:
+        if start_date and not end_date:
+            return f"<context><p>No <b>{collection_name}</b> records found for <b>{start_date}</b>.</p></context>"
+        if start_date and end_date:
+            return f"<context><p>No <b>{collection_name}</b> records found from <b>{start_date}</b> to <b>{end_date}</b>.</p></context>"
+        return "<context><p>No records found for the selected period.</p></context>"
+
+    # Preserve existing behavior for None/Falsey non-list cases
     if not data_list:
         return "<context><p>No records found for the selected period.</p></context>"
-    
+
     if isinstance(data_list, int):
         return f"<context><head><b>Total count:</b></head> {data_list}</context>"
 
     def clean_date(dt):
-        return dt.strftime("%d %b %H:%M") if hasattr(dt, 'strftime') else dt
+        if not hasattr(dt, "strftime"):
+            return dt
+        try:
+            # Convert aware UTC -> IST for display; if naive, assume UTC then convert
+            if getattr(dt, "tzinfo", None) is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(IST).strftime("%d %b %H:%M")
+        except Exception:
+            return dt.strftime("%d %b %H:%M")
 
-    # Style Definitions
     t_style = 'width:100%; border-collapse: collapse; font-family: sans-serif; font-size: 13px; margin-top: 8px;'
     th_style = 'background-color: #f8f9fa; border-bottom: 2px solid #dee2e6; padding: 8px; text-align: left; color: #495057;'
     td_base = 'border-bottom: 1px solid #dee2e6; padding: 8px; vertical-align: top;'
 
     html_parts = []
-    
-    # 2. Start Context Tag
     html_parts.append("<context>")
-    
-    # 3. Build the Head Tag (Title and Metadata)
+
     html_parts.append("<head>")
     html_parts.append(f"<b>📊 {collection_name.upper()} REPORT</b><br>")
     if start_date and end_date:
         html_parts.append(f"<small style='color: #6c757d;'>Period: {start_date} to {end_date}</small><br>")
+    elif start_date and not end_date:
+        html_parts.append(f"<small style='color: #6c757d;'>Period: {start_date}</small><br>")
     html_parts.append(f"<small style='color: #6c757d;'>Total Records: {len(data_list)}</small>")
     html_parts.append("</head>")
 
-    # 4. Start Table
     html_parts.append(f'<table style="{t_style}"><thead><tr>')
-
     rows_parts = []
-    
+
     if collection_name == "position":
-        html_parts.append(f'<th style="{th_style}">Symbol</th><th style="{th_style}">Qty</th><th style="{th_style}">P&L</th></tr></thead><tbody>')
+        html_parts.append(
+            f'<th style="{th_style}">Symbol</th><th style="{th_style}">Qty</th><th style="{th_style}">P&L</th>'
+            f'</tr></thead><tbody>'
+        )
         for doc in data_list:
             pnl = doc.get("profitLoss", 0)
             pnl_color = "color: #28a745;" if pnl >= 0 else "color: #dc3545;"
-            rows_parts.append(f'<tr>'
-                              f'<td style="{td_base}">{doc.get("symbolName")}</td>'
-                              f'<td style="{td_base}">{doc.get("totalQuantity")}</td>'
-                              f'<td style="{td_base} {pnl_color} font-weight: bold;">{pnl}</td>'
-                              f'</tr>')
+            rows_parts.append(
+                f'<tr>'
+                f'<td style="{td_base}">{doc.get("symbolName")}</td>'
+                f'<td style="{td_base}">{doc.get("totalQuantity")}</td>'
+                f'<td style="{td_base} {pnl_color} font-weight: bold;">{pnl}</td>'
+                f'</tr>'
+            )
 
     elif collection_name == "trade":
-        html_parts.append(f'<th style="{th_style}">Symbol</th><th style="{th_style}">Status</th><th style="{th_style}">Time</th></tr></thead><tbody>')
+        html_parts.append(
+            f'<th style="{th_style}">Symbol</th><th style="{th_style}">Status</th><th style="{th_style}">Time</th>'
+            f'</tr></thead><tbody>'
+        )
         for doc in data_list:
-            rows_parts.append(f'<tr>'
-                              f'<td style="{td_base}">{doc.get("symbolName")}</td>'
-                              f'<td style="{td_base}">{doc.get("status")}</td>'
-                              f'<td style="{td_base}">{clean_date(doc.get("createdAt"))}</td>'
-                              f'</tr>')
+            rows_parts.append(
+                f'<tr>'
+                f'<td style="{td_base}">{doc.get("symbolName")}</td>'
+                f'<td style="{td_base}">{doc.get("status")}</td>'
+                f'<td style="{td_base}">{clean_date(doc.get("createdAt"))}</td>'
+                f'</tr>'
+            )
 
     elif collection_name == "transaction":
-        html_parts.append(f'<th style="{th_style}">Amt</th><th style="{th_style}">Type</th><th style="{th_style}">Time</th></tr></thead><tbody>')
+        html_parts.append(
+            f'<th style="{th_style}">Amt</th><th style="{th_style}">Type</th><th style="{th_style}">Time</th>'
+            f'</tr></thead><tbody>'
+        )
         for doc in data_list:
             is_credit = doc.get("type") == "credit"
             amt_color = "color: #28a745;" if is_credit else "color: #dc3545;"
             prefix = "+" if is_credit else "-"
-            rows_parts.append(f'<tr>'
-                              f'<td style="{td_base} {amt_color}">{prefix}{doc.get("amount")}</td>'
-                              f'<td style="{td_base}">{doc.get("transactionType")}</td>'
-                              f'<td style="{td_base}">{clean_date(doc.get("createdAt"))}</td>'
-                              f'</tr>')
+            rows_parts.append(
+                f'<tr>'
+                f'<td style="{td_base} {amt_color}">{prefix}{doc.get("amount")}</td>'
+                f'<td style="{td_base}">{doc.get("transactionType")}</td>'
+                f'<td style="{td_base}">{clean_date(doc.get("createdAt"))}</td>'
+                f'</tr>'
+            )
 
     elif collection_name == "paymentRequest":
         status_map = {0: "🕒 Pending", 1: "✅ Approved", 2: "❌ Rejected"}
-        html_parts.append(f'<th style="{th_style}">Method</th><th style="{th_style}">Amount</th><th style="{th_style}">Status</th></tr></thead><tbody>')
+        html_parts.append(
+            f'<th style="{th_style}">Method</th><th style="{th_style}">Amount</th><th style="{th_style}">Status</th>'
+            f'</tr></thead><tbody>'
+        )
         for doc in data_list:
-            rows_parts.append(f'<tr>'
-                              f'<td style="{td_base}">{doc.get("paymentRequestType")}</td>'
-                              f'<td style="{td_base}">{doc.get("amount")}</td>'
-                              f'<td style="{td_base}">{status_map.get(doc.get("status"), "Unknown")}</td>'
-                              f'</tr>')
+            rows_parts.append(
+                f'<tr>'
+                f'<td style="{td_base}">{doc.get("paymentRequestType")}</td>'
+                f'<td style="{td_base}">{doc.get("amount")}</td>'
+                f'<td style="{td_base}">{status_map.get(doc.get("status"), "Unknown")}</td>'
+                f'</tr>'
+            )
 
     elif collection_name == "user":
-        html_parts.append(f'<th style="{th_style}">User</th><th style="{th_style}">Balance</th><th style="{th_style}">P&L</th></tr></thead><tbody>')
+        html_parts.append(
+            f'<th style="{th_style}">User</th><th style="{th_style}">Balance</th><th style="{th_style}">P&L</th>'
+            f'</tr></thead><tbody>'
+        )
         for doc in data_list:
-            rows_parts.append(f'<tr>'
-                              f'<td style="{td_base}">{doc.get("name")}</td>'
-                              f'<td style="{td_base}">{doc.get("balance")}</td>'
-                              f'<td style="{td_base}">{doc.get("profitLoss")}</td>'
-                              f'</tr>')
+            rows_parts.append(
+                f'<tr>'
+                f'<td style="{td_base}">{doc.get("name")}</td>'
+                f'<td style="{td_base}">{doc.get("balance")}</td>'
+                f'<td style="{td_base}">{doc.get("profitLoss")}</td>'
+                f'</tr>'
+            )
 
-    # 5. Final Assembly
     html_parts.extend(rows_parts)
     html_parts.append("</tbody></table>")
-    html_parts.append("</context>") # Close Context
-    
+    html_parts.append("</context>")
     return "".join(html_parts)
 
 def query_superadmin_db(user_msg: str):
@@ -689,52 +815,63 @@ def format_superadmin_interactive(data_list, collection_name, page=1):
     html.append("</context>")
     return "".join(html)
 
-def llm_fallback(user_msg: str, user_id: str) -> str:
+def llm_fallback(user_msg, user_id: str) -> str:
     logger.info(f"--- Starting LLM Fallback Flow for User: {user_id} ---")
 
-    # 1. Greetings
-    if _is_greeting(user_msg):
+    # Normalize message once (handles dict / JSON string / raw string)
+    text = _extract_text(user_msg)
+
+    # 1) Greetings
+    if _is_greeting(text):
         logger.info(" STEP: Greeting detected.")
         return "Hello! How can I assist with your trading account today?"
 
-    # 2. Smart DB Check
-    db_res = query_user_db(user_msg, user_id)
-    if db_res:
-        logger.info(f" STEP: Data found in {db_res['collection']}. Formatting...")
-        
-        # APPLY THE FORMATTER HERE
-        clean_data = format_db_results(db_res["data"], db_res["collection"])
-        
-        # Convert to pretty string
-        raw_json = json.dumps(clean_data, default=str, indent=2)
-        
-        return f"Your {db_res['collection']} records are:\n\n{raw_json}"
+    # 2) Smart DB Check
+    db_res = query_user_db(user_msg, user_id)  # query_user_db extracts text internally
+    if db_res is not None:
+        logger.info(f" STEP: DB check completed for collection: {db_res.get('collection')}")
 
-    # 3. FAQ Check (Only runs if no DB data was found)
-    logger.info(" STEP: No DB data found. Moving to FAQ check.")
-    faq_answer = faq_reply(user_msg)
+        # If it's a count response, format_db_results already handles int
+        period = db_res.get("period")
+        clean_data = format_db_results(
+            db_res.get("data"),
+            db_res.get("collection"),
+            start_date=period,
+            end_date=None
+        )
+
+        # IMPORTANT: do NOT json.dumps(clean_data) (it causes \" and \\ud83d escapes)
+        return f"Your {db_res.get('collection')} records are:\n\n{clean_data}"
+
+    # 3) FAQ Check (Only runs if DB returned None, meaning "not a DB intent" or hard error)
+    logger.info(" STEP: No DB route/data (None). Moving to FAQ check.")
+    faq_answer = faq_reply(text)
     if faq_answer:
         return faq_answer
 
-    # 4. Domain Guard
+    # 4) Domain Guard
     logger.info(" STEP: No FAQ match. Checking Domain Guard.")
-    # No FAQ match. Checking Domain Guard.
-    ga = guard_action(user_msg)
-    if ga["action"] == "refuse":
-        logger.info(" STEP: Message refused by Guard.")
-        # Message refused by Guard.
-        return ga["message"]
+    ga = guard_action(text)
 
-    # 5. General LLM Answer
+    # Allowlist: never refuse if clearly trading/account related.
+    # This protects against false refusals on valid trading queries.
+    trading_keywords = [
+        "trade", "trades", "order", "orders", "position", "positions", "holding", "holdings",
+        "pnl", "p&l", "balance", "deposit", "withdraw", "payment", "transaction", "transactions"
+    ]
+    if ga.get("action") == "refuse" and not any(k in text.lower() for k in trading_keywords):
+        logger.info(" STEP: Message refused by Guard.")
+        return ga.get("message")
+
+    # 5) General LLM Answer
     logger.info(" STEP: Falling back to General LLM support.")
-    # Falling back to General LLM support.
     SUPPORT_SYSTEM = (
         "You are a customer support agent for a trading app. "
         "Answer ONLY trading support questions (orders, PNL, KYC, deposits). "
         "Simple English, no AI mention, 80-130 words."
     )
 
-    raw_support = _call_llm_internal(SUPPORT_SYSTEM, user_msg)
+    raw_support = _call_llm_internal(SUPPORT_SYSTEM, text)
     cleaned = _clean_llm_text(raw_support)
     return _enforce_medium_length(cleaned, 80, 130)
 
