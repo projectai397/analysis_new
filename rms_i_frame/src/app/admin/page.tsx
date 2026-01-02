@@ -3,7 +3,7 @@
 import useSWR from "swr";
 import { useChatSocket } from "@/lib/ws";
 import { getChatroom } from "@/lib/api";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, Suspense } from "react";
 import type { ConversationItem, ChatroomDetail } from "@/types/chatbot_type";
 import { MessageList } from "@/components/chat/message-list";
 import { Composer } from "@/components/chat/composer";
@@ -23,7 +23,7 @@ function decodeJWT(token: string): Record<string, unknown> | null {
         );
         const jsonPayload = atob(padded);
         return JSON.parse(jsonPayload);
-    } catch (error) {
+    } catch {
         return null;
     }
 }
@@ -61,6 +61,14 @@ function getInitials(name: string): string {
 }
 
 export default function AdminPage() {
+    return (
+        <Suspense fallback={null}>
+            <AdminPageInner />
+        </Suspense>
+    );
+}
+
+function AdminPageInner() {
     const searchParams = useSearchParams();
     const token = searchParams.get("token");
 
@@ -90,9 +98,7 @@ export default function AdminPage() {
 
 function AdminView({ token }: { token: string }) {
     const {
-        status,
         chatId,
-        needsSelection,
         chatrooms,
         selectRoom,
         messages,
@@ -109,14 +115,12 @@ function AdminView({ token }: { token: string }) {
         { revalidateOnFocus: true }
     );
 
-    const [showReplay, setShowReplay] = useState(false);
     const [showChatView, setShowChatView] = useState(false);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
 
     useEffect(() => {
         resetLiveMessages();
-        setShowReplay(false);
         setShowChatView(false);
     }, [chatId, resetLiveMessages]);
 
