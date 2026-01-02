@@ -766,40 +766,46 @@ async def handle_real_trade(trade_data: dict, context: CallbackContext):
 
 def listen_for_trade_changes(app_instance):
     """
-    Runs the MongoDB Change Stream in a separate thread.
-    Waits for the bot to initialize before starting the stream.
+    Watches tele_notification and triggers notifications ONLY for new inserts.
+    Fixed: Avoids ExtBot initialization error by using a safer bot check.
     """
     try:
-        # 1. Wait for bot initialization
-        # The bot property exists, but it's not 'ready' until initialize() is done.
-        retries = 0
-        while retries < 10:
+        logger.info("🔄 Trade listener thread started. Waiting for bot...")
+        
+        bot_instance = None
+        # Safer initialization check
+        for _ in range(30): # Wait up to 30 seconds
             try:
-                # Accessing a bot property to check if it's initialized
-                _ = app_instance.bot.id 
-                break
+                # We check if the bot object exists and attempt to access username
+                # username is usually available once the app starts its loop
+                if app_instance.bot:
+                    bot_instance = app_instance.bot
+                    # If this succeeds, the bot is initialized enough for our needs
+                    logger.info("✅ Bot detected. Proceeding to watch stream.")
+                    break
             except Exception:
-                logger.info("⏳ Waiting for bot initialization...")
-                time.sleep(1)
-                retries += 1
+                pass
+            time.sleep(1)
 
-        bot_instance = app_instance.bot 
-        logger.info(f"📡 Trade listener started for bot: @{bot_instance.username}")
+        if not bot_instance:
+            logger.error("❌ Bot failed to initialize in time. Listener thread stopping.")
+            return
 
-        # 2. Watch tele_notification collection
+        # Watch collection only for new inserts
         with tele_notification.watch(full_document='updateLookup') as stream:
+            logger.info(f"📡 Now watching for INSERTS in: {tele_notification.name}")
+            
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
             for change in stream:
-                if change['operationType'] == 'insert':
-                    logger.info("Change detected: INSERT on tele_notification collection.")
-                    
-                    # Run notification logic
+                # 🚨 ONLY trigger on 'insert'
+                if change.get('operationType') == 'insert':
+                    logger.info("⚡ New Trade found. Sending pretty notification...")
                     loop.run_until_complete(handle_trade_update(change, bot_instance))
 
     except Exception as e:
-        logger.error(f"Error in change stream thread: {e}")
+        logger.error(f"❌ Listener Error: {e}", exc_info=True)
 
 def start_trade_listener(app_instance):
     """
@@ -821,68 +827,68 @@ def start_trade_listener(app_instance):
 
 # Assuming the logic remains local, but using the imported trade logic:
 
-async def handle_trade_update(change, bot_instance):
+async def handle_trade_update(change: dict, bot_instance):
     """
-    Handles tele_notification updates by traversing the hierarchy and sending
-    a notification based on userId, title, and message.
+    Formats notification to match pretty style and adds Quantity field.
     """
-    if change.get("operationType") not in ["insert", "update"]:
+    doc = change.get("fullDocument")
+    if not doc:
         return
 
-    notification_doc = change.get("fullDocument")
-    if not notification_doc:
-        logger.warning("Notification change missing fullDocument. Skipping.")
+    # 1. Extract Fields from Document
+    user_id_str = str(doc.get("userId", ""))
+    symbol = doc.get("symbolName", "N/A")
+    quantity = doc.get("quantity", 0)  # 🆕 Added Quantity
+    price = doc.get("price", 0)
+    order_type = doc.get("orderType", "N/A")
+    trade_type = doc.get("tradeType", "N/A")
+    
+    # Determine the status for the bold title
+    status_raw = doc.get("status", "Executed")
+    title = f"Trade {status_raw.capitalize()}"
+
+    # 2. Get subscribed parents (IDs and Roles)
+    parent_subscriptions = await get_subscribed_parents(user_id_str)
+    if not parent_subscriptions:
+        logger.info(f"No subscribers for client {user_id_str}")
         return
 
-    # 1. Extract userId from tele_notification document
-    user_id_obj = notification_doc.get("userId")
-    if not user_id_obj:
-        logger.warning("Notification document missing userId. Skipping notification.")
-        return
-
-    user_id_str = str(user_id_obj)
-
-    # 2. Get all subscribed parent chat_ids using existing hierarchy logic
-    target_chat_ids = await get_subscribed_parents(user_id_str)
-
-    if not target_chat_ids:
-        logger.info(f"No subscribed parents found for user {user_id_str}.")
-        return
-
-    # 3. Look up the client's display name from users collection
-    client_display_name = user_id_str  # fallback
+    # 3. Look up Client Name
+    client_name = user_id_str
     try:
-        client_doc = users.find_one({"_id": ObjectId(user_id_str)})
+        client_doc = await asyncio.to_thread(users.find_one, {"_id": ObjectId(user_id_str)})
         if client_doc:
-            client_display_name = (
-                client_doc.get("userName")
-                or client_doc.get("name")
-                or user_id_str
-            )
+            client_name = client_doc.get("userName") or client_doc.get("name") or user_id_str
     except Exception as e:
-        logger.error(f"Error looking up client name for {user_id_str}: {e}")
+        logger.error(f"⚠️ Client name lookup failed: {e}")
 
-    # 4. Extract title and message from tele_notification document
-    title = notification_doc.get("title", "Notification")
-    body_message = notification_doc.get("message", "") or ""
-
-    # 5. Construct the notification text
-    base_notification_message = (
+    # 4. Construct the Body (Matching image_026ae3.png)
+    # Note: Labels and values are NOT bolded for the 'pretty' look.
+    body = (
         f"🔔 <b>{html.escape(str(title))}</b>\n"
-        f"Client Name: <b>{html.escape(str(client_display_name))}</b>\n\n"
-        f"{body_message}"
+        f"Client Name: {html.escape(str(client_name))}\n"
+        f"Symbol: {html.escape(str(symbol))}\n"
+        f"Quantity: {quantity}\n"
+        f"Price: {price}\n"
+        f"Order Type: {html.escape(str(order_type))}\n"
+        f"Trade Type: {html.escape(str(trade_type))}"
     )
 
-    # 6. Send the notification using existing send_message_to_chats
-    await send_message_to_chats(
-        message=base_notification_message,
-        chat_ids=list(target_chat_ids),
-        bot=bot_instance,
-    )
-    logger.info(
-        f"Notification queued for {len(target_chat_ids)} subscribers for tele_notification by {user_id_str}."
-    )
+    # 5. Add Footer Message (Upper Case, with blank line spacing)
+    footer_text = doc.get("comment") or doc.get("message")
+    if footer_text:
+        body += f"\n\n{html.escape(str(footer_text)).upper()}"
 
+    # 6. Send to each parent with dynamic "To: ROLE" bold header
+    for item in parent_subscriptions:
+        if isinstance(item, (tuple, list)):
+            chat_id, role = item[0], item[1]
+        else:
+            chat_id = item
+            sub_doc = await asyncio.to_thread(notification.find_one, {"chat_ids": chat_id})
+            role = sub_doc.get("role", "ADMIN").upper() if sub_doc else "ADMIN"
+
+        await send_message_to_chats(body, chat_id, bot_instance, role)
 
 async def get_chat_ids_for_role(role: str):
     """
