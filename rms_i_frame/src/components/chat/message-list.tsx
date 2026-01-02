@@ -234,7 +234,8 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
       >
       {items.map((m, idx) => {
         const key = (m as any).message_id || `${m.kind}-${idx}-${m.created_at}`
-        const isMine = viewerRole === "superadmin" ? m.from === "admin" : m.from === "user"
+        const isMine = viewerRole === "superadmin" ? (m.from === "admin" || m.from === "bot") : m.from === "user"
+        const isBot = m.from === "bot"
         const previousItem = idx > 0 ? items[idx - 1] : undefined
         const showDateSeparator = shouldShowDateSeparator(m, previousItem)
         
@@ -287,7 +288,7 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
             )}
             <div className={`flex ${isMine ? "justify-end" : "justify-start"} mb-1`}>
               <div
-                className={`max-w-[75%] sm:max-w-[70%] md:max-w-[65%] lg:max-w-[60%] rounded-lg px-2 py-1.5 text-sm shadow-sm transition-colors duration-300 ${
+                className={`max-w-[75%] sm:max-w-[70%] md:max-w-[65%] lg:max-w-[60%] rounded-lg px-2 py-1.5 text-sm shadow-sm transition-colors duration-300 overflow-hidden ${
                   isMine
                     ? "bg-[#dcf8c6] dark:bg-[#005c4b] text-[#111b21] dark:text-[#e9edef] rounded-tr-none"
                     : "bg-[#ffffff] dark:bg-[#202c33] text-[#111b21] dark:text-[#e9edef] rounded-tl-none"
@@ -297,6 +298,11 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
               >
                 {m.kind === "text" && (
                   <div className="space-y-1">
+                    {isBot && viewerRole === "superadmin" && (
+                      <p className="text-xs font-medium text-[#667781] dark:text-[#8696a0] mb-1" role="note">
+                        Bot reply
+                      </p>
+                    )}
                     {(() => {
                       const emojiParsedText = parseEmojis(m.text)
                       const normalizedText = normalizeText(emojiParsedText)
