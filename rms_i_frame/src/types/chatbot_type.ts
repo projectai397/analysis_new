@@ -45,7 +45,7 @@ export type ServerTextMessage = {
 
 export type ServerFileMessage = {
   type: "message"
-  from: "user" | "admin" | "superadmin"
+  from: any
   is_file: true
   kind: "file"
   file_url: string
@@ -58,7 +58,7 @@ export type ServerFileMessage = {
 
 export type ServerAudioMessage = {
   type: "message"
-  from: "user" | "admin" | "superadmin"
+  from: any
   is_file: true
   kind: "audio"
   audio_url: string
@@ -95,12 +95,11 @@ export type ClientEvent = ClientPing | ClientSelectRoom | ClientSendText
 export type ConversationItem =
   | {
       kind: "text"
-      from: "user" | "admin" | "bot" | "superadmin"
+      from: any
       text: string
       created_at: string
       message_id?: string
       meta?: { domain?: string; reason?: string }
-      status?: "sending" | "sent" | "delivered"
     }
   | {
       kind: "file"
@@ -110,17 +109,15 @@ export type ConversationItem =
       file_type: string
       created_at: string
       message_id?: string
-      status?: "sending" | "sent" | "delivered"
     }
   | {
       kind: "audio"
-      from: "user" | "admin" | "superadmin"
+      from: any
       audio_url: string
       audio_name: string
       audio_type: string
       created_at: string
       message_id?: string
-      status?: "sending" | "sent" | "delivered"
     }
 
 export type ChatroomDetail = {
@@ -133,6 +130,8 @@ export type ChatroomDetail = {
     is_superadmin_active: boolean
     created_time: string
     updated_time: string
+    name?: string
+    username?: string
   }
   conversation: (
     | { from: "user" | "bot" | "admin"; text: string; created_at: string }
