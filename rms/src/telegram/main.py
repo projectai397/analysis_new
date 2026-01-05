@@ -499,16 +499,19 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     context.user_data.pop("password_prompt_msg_id", None)
 
     await info_msg.edit_text(
-        "🎉 <b>Login Successful!</b>\n"
-        f"User: <code>{html.escape(str(user.get('username') or user.get('phone') or ''))}</code>\n\n"
-        "Now you can use:\n"
-        "• <code>/users</code>\n"
-        "• <code>/position</code>\n"
-        "• <code>/trades</code>\n"
-        "• <code>/alerts</code>\n"
-        "• <code>/transaction</code>",
-        parse_mode="HTML",
-    )
+    "🎉 <b>Login Successful!</b>\n"
+    f"User: <code>{html.escape(str(user.get('username') or user.get('phone') or ''))}</code>\n\n"
+    "Now you can use:\n"
+    "• <code>/users</code>\n"
+    "• <code>/position</code>\n"
+    "• <code>/trades</code>\n"
+    "• <code>/alerts</code>\n"
+    "• <code>/transaction</code>\n"
+    "• <code>/role_wise_position</code>\n"
+    "• <code>/role_wise_trades</code>\n"
+    "• <code>/role_wise_transaction</code>",
+    parse_mode="HTML",
+)
     remember_bot_message_from_message(update, info_msg)
 
     subscribe_button, status_text = await get_subscription_button(chat_id, user_role_string)
@@ -609,6 +612,40 @@ async def me(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Remember bot message
     remember_bot_message_from_message(update, update.message)
 
+def resolve_user_display_by_id(user_id) -> str:
+    """
+    Returns a readable user display name for any user ObjectId/string.
+    Format: "NameOrUsernameOrPhone"
+    """
+    try:
+        oid = user_id if isinstance(user_id, ObjectId) else ObjectId(str(user_id))
+    except Exception:
+        return str(user_id or "")
+
+    try:
+        doc = users.find_one({"_id": oid})
+    except Exception:
+        doc = None
+
+    if not doc:
+        return str(oid)
+
+    return (
+        doc.get("name")
+        or doc.get("userName")
+        or doc.get("username")
+        or doc.get("phone")
+        or str(oid)
+    )
+
+
+def format_entity_header(entity_type: str, entity_id) -> str:
+    """
+    entity_type: "Admin" | "Master" | "Client" | etc.
+    Output example: "Master: Ramesh (6943acbb...)".
+    """
+    name = resolve_user_display_by_id(entity_id)
+    return f"{entity_type}: {html.escape(str(name))} (<code>{html.escape(str(entity_id))}</code>)"
 
 # 🔹 NEW/REFACTORED: Consolidate subscribe/unsubscribe logic into one handler
 async def handle_subscription_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1271,15 +1308,18 @@ async def _set_bot_commands(app):
     bot_name = app.bot_data.get("bot_name", "Bot")
 
     commands = [
-        BotCommand("start", f"Login to {bot_name} bot"),
-        BotCommand("users", "View/manage users"),
-        BotCommand("position", "View positions summary"),
-        BotCommand("trades", "View trades summary"),
-        BotCommand("alerts", "View alerts summary"),
-        BotCommand("transaction", "View transactions summary"),
-        BotCommand("me", "Who am I / role info"),
-        BotCommand("cancel", "Cancel current operation"),
-    ]
+    BotCommand("start", f"Login to {bot_name} bot"),
+    BotCommand("users", "View/manage users"),
+    BotCommand("position", "View positions summary"),
+    BotCommand("role_wise_position", "Role-wise positions (Admin/Master/Client)"),
+    BotCommand("transaction", "View transactions summary"),
+    BotCommand("role_wise_transaction", "Role-wise transactions (Admin/Master/Client)"),
+    BotCommand("role_wise_trades", "Role-wise trades (Admin/Master/Client)"),
+    BotCommand("trades", "View trades summary"),
+    BotCommand("alerts", "View alerts summary"),
+    BotCommand("me", "Who am I / role info"),
+    BotCommand("cancel", "Cancel current operation"),
+]
 
     await app.bot.delete_my_commands(scope=BotCommandScopeDefault())
     await app.bot.delete_my_commands(scope=BotCommandScopeAllPrivateChats())
@@ -1301,15 +1341,21 @@ def build_application(token: str, bot_name: str, logo_path: str):
     # 3. Import and register feature modules
     from .users import register_user_handlers
     from .positions import register_position_handlers
+    from .role_wise_positions import register_role_wise_position_handlers  # ✅ NEW
     from .trades import register_trade_handlers
     from .alerts import register_alert_handlers
     from .transactions import register_transaction_handlers
+    from .role_wise_transactions import register_role_wise_transaction_handlers
+    from .role_wise_trades import register_role_wise_trade_handlers
 
     register_user_handlers(app)
     register_position_handlers(app)
+    register_role_wise_position_handlers(app)  # ✅ NEW
     register_trade_handlers(app)
     register_alert_handlers(app)
     register_transaction_handlers(app)
+    register_role_wise_transaction_handlers(app)
+    register_role_wise_trade_handlers(app)
 
     # 4. 🚨 CRITICAL FIX: Pass 'app' to the listener
     # This prevents the "Global 'app' not found" error in your threads.

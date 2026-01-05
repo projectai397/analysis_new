@@ -18,6 +18,7 @@ from telegram.ext import (
 )
 
 from src.config import trade_market
+from src.helpers.hierarchy_service import get_user_full_by_id  # ✅ NEW
 from .main import (
     get_logged_in,
     require_login,
@@ -32,6 +33,27 @@ logger = logging.getLogger(__name__)
 
 POSITION_LIST_CACHE: Dict[int, Dict[str, Any]] = {}
 POSITION_PAGE_SIZE = 10
+
+
+def resolve_user_display(user_id: ObjectId) -> str:
+    """
+    Convert a stored userId(ObjectId) into a readable name/userName/username/phone.
+    Falls back to the raw ObjectId string if lookup fails.
+    """
+    try:
+        user = get_user_full_by_id(user_id)
+        if not user:
+            return str(user_id)
+
+        return (
+            user.get("name")
+            or user.get("userName")
+            or user.get("username")
+            or user.get("phone")
+            or str(user_id)
+        )
+    except Exception:
+        return str(user_id)
 
 
 def build_position_page_text_and_keyboard(tg_id: int) -> Tuple[str, List[List[InlineKeyboardButton]]]:
@@ -179,8 +201,8 @@ async def position_detail_callback(update: Update, context: ContextTypes.DEFAULT
         remember_bot_message_from_message(update, msg)
         return
 
+    # ✅ UPDATED: removed ("User ID", "userId") and will show a resolved "User" row
     field_order = [
-        ("User ID", "userId"),
         ("Symbol", "symbolName"),
         ("Quantity", "quantity"),
         ("Price", "price"),
@@ -198,6 +220,15 @@ async def position_detail_callback(update: Update, context: ContextTypes.DEFAULT
 
     rows: List[str] = []
     label_width = max(len(label) for label, _ in field_order)
+    label_width = max(label_width, len("User"))
+
+    # ✅ Resolve user name
+    user_display = "-"
+    uid = doc.get("userId")
+    if isinstance(uid, ObjectId):
+        user_display = resolve_user_display(uid)
+    rows.append(f"{'User'.ljust(label_width)} : {user_display}")
+
     for label, key in field_order:
         raw_val = doc.get(key, "-")
         if isinstance(raw_val, ObjectId):
@@ -207,8 +238,7 @@ async def position_detail_callback(update: Update, context: ContextTypes.DEFAULT
         text_val = "-" if raw_val is None else str(raw_val)
         rows.append(f"{label.ljust(label_width)} : {text_val}")
 
-    table_text = "\n".join(rows)
-    table_text = html.escape(table_text)
+    table_text = html.escape("\n".join(rows))
 
     header = (
         "📊 <b>Position Summary</b>\n\n"
