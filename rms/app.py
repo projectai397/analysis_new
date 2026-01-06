@@ -1,5 +1,6 @@
 # src/app.py
 from __future__ import annotations
+from ast import Dict
 from fileinput import filename
 from waitress import serve
 import jwt
@@ -49,7 +50,8 @@ from src.helper import (_oid, cache_get, cache_set, chatroom_with_messages,
                         msg_dict, now_ist_iso, repeated_user_questions,
                         room_add, room_broadcast, room_remove,
                         save_demo_message, upsert_support_user_from_jwt,is_any_staff_present,cancel_pending_bot_reply,generate_bot_reply_lines,schedule_bot_reply_after_2m,
-                        _can_ask_and_inc,ensure_staff_bot_room,superadmin_llm_fallback,_sock_add,_sock_remove,_sock_send_any,_sock_send_all)
+                        _can_ask_and_inc,ensure_staff_bot_room,superadmin_llm_fallback,_sock_add,_sock_remove,_sock_send_any,_sock_send_all,_resolve_staff_links_from_clients,
+                        _staff_bot_should_bot_reply,_staff_bot_peers_present,_is_staff_bot_room,is_higher_staff_present,_ensure_presence_bucket)
 # materializers (analytics)
 from src.helpers.build_service import (materialize_admins_analysis,
                                        materialize_masters_analysis,
@@ -102,8 +104,11 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 MASTER_SOCKETS = defaultdict(set)  # master_user_id(str) -> set(ws)
 USER_SOCKETS   = defaultdict(set)  # user_id(str) -> set(ws)
+ADMIN_SOCKETS = defaultdict(set)
+SUPERADMIN_SOCKETS = defaultdict(set)
 
 ACTIVE_CALLS = {}  # call_id -> {"chat_id": str, "user_id": str, "master_id": str, "state": str}
+PRESENCE: Dict[str, Dict[str, set]] = {}
 # ─────────────────────────────────────────────────────────────
 # Analytics job runners
 # ─────────────────────────────────────────────────────────────
@@ -590,6 +595,280 @@ def create_app() -> Flask:
 
         threading.Thread(target=_idle_watchdog, daemon=True).start()
 
+        # ──────────────────────────────────────────────────────────────
+        # ✅ NEW: helper for staff_bot access (ADD-ONLY)
+        # Allow access if current staff is in any of: user_id / owner_id / admin_id / super_admin_id
+        # ──────────────────────────────────────────────────────────────
+        def _staff_bot_allowed(room, pro_id):
+            try:
+                pid = str(pro_id)
+                allowed_ids = {
+                    str(getattr(room, "user_id", "") or ""),
+                    str(getattr(room, "owner_id", "") or ""),
+                    str(getattr(room, "admin_id", "") or ""),
+                    str(getattr(room, "super_admin_id", "") or ""),
+                }
+                return pid in allowed_ids
+            except Exception:
+                return False
+
+        # ──────────────────────────────────────────────────────────────
+        # ✅ NEW: staff_bot room kind resolver (ADD-ONLY)
+        # Robust even if owner_id/admin_id are missing:
+        # - master_room if super_admin_id exists
+        # - admin_room if admin_id exists and super_admin_id missing
+        # - else owner_room
+        # ──────────────────────────────────────────────────────────────
+        def _staff_bot_room_kind(room):
+            try:
+                if (getattr(room, "room_type", None) or "support") != "staff_bot":
+                    return None
+                if getattr(room, "super_admin_id", None):
+                    return "master_room"
+                if getattr(room, "admin_id", None) and not getattr(room, "super_admin_id", None):
+                    return "admin_room"
+                return "owner_room"
+            except Exception:
+                return "owner_room"
+
+        # ──────────────────────────────────────────────────────────────
+        # ✅ NEW: role-aware presence for staff_bot (ADD-ONLY)
+        # - master_room: higher staff = admin/superadmin
+        # - admin_room: higher staff = superadmin
+        # - owner_room: no higher staff
+        # ──────────────────────────────────────────────────────────────
+        def is_higher_staff_present(room, sender_role: str, chat_id: str) -> bool:
+            try:
+                _ensure_presence_bucket(chat_id)
+                roles = PRESENCE.get(chat_id, {}).get("_roles", {})
+
+                kind = _staff_bot_room_kind(room)
+
+                if kind == "master_room":
+                    # higher than master = admin or superadmin
+                    if sender_role == "master":
+                        return (len(roles.get("admin", set())) > 0) or (len(roles.get("superadmin", set())) > 0)
+                    return False
+
+                if kind == "admin_room":
+                    # higher than admin = superadmin
+                    if sender_role == "admin":
+                        return len(roles.get("superadmin", set())) > 0
+                    return False
+
+                # owner_room: no higher role
+                return False
+            except Exception:
+                return False
+
+        # ──────────────────────────────────────────────────────────────
+        # ✅ NEW: who gets bot replies in staff_bot rooms (ADD-ONLY)
+        # - master_room: only master gets immediate bot replies
+        # - admin_room: only admin gets immediate bot replies
+        # - owner_room: only superadmin gets immediate bot replies
+        # ──────────────────────────────────────────────────────────────
+        def _staff_bot_sender_gets_bot(room, sender_role: str) -> bool:
+            try:
+                kind = _staff_bot_room_kind(room)
+                if kind == "master_room":
+                    return sender_role == "master"
+                if kind == "admin_room":
+                    return sender_role == "admin"
+                # owner_room
+                return sender_role == "superadmin"
+            except Exception:
+                return False
+
+        # ──────────────────────────────────────────────────────────────
+        # ✅ NEW: engagement rules for staff_bot (ADD-ONLY)
+        # - master_room: if admin or superadmin sends a message -> engaged True
+        # - admin_room: if superadmin sends a message -> engaged True
+        # owner_room: no engage rules
+        # ──────────────────────────────────────────────────────────────
+        def _staff_bot_apply_engagement(room, chat_id: str, sender_role: str):
+            try:
+                kind = _staff_bot_room_kind(room)
+                if kind == "master_room":
+                    if sender_role in ("admin", "superadmin"):
+                        STAFF_ENGAGED[chat_id] = True
+                elif kind == "admin_room":
+                    if sender_role == "superadmin":
+                        STAFF_ENGAGED[chat_id] = True
+            except Exception:
+                pass
+
+        # ──────────────────────────────────────────────────────────────
+        # ✅ NEW: derive staff links stub if missing (ADD-ONLY, safe)
+        # ──────────────────────────────────────────────────────────────
+        try:
+            _resolve_staff_links_from_clients  # noqa: F401
+        except Exception:
+            def _resolve_staff_links_from_clients(role, pro_id):
+                return None, None
+
+        # ──────────────────────────────────────────────────────────────
+        # ✅ NEW: 2m buffer for STAFF_BOT rooms using staff LLM (ADD-ONLY)
+        # IMPORTANT: your existing schedule_bot_reply_after_2m uses generate_bot_reply_lines(),
+        # which can return nothing for staff messages. This new scheduler uses superadmin_llm_fallback().
+        # ──────────────────────────────────────────────────────────────
+        def schedule_staff_bot_reply_after_2m(chat, chat_id: str, user_text: str, pro_id_str: str):
+            cancel_pending_bot_reply(chat_id)
+
+            def _fire():
+                try:
+                    with PENDING_LOCK:
+                        PENDING_BOT_TIMERS.pop(chat_id, None)
+                except Exception:
+                    pass
+
+                # ✅ IMPORTANT: after fallback -> bot becomes instant again until higher staff speaks
+                try:
+                    STAFF_ENGAGED[chat_id] = False
+                except Exception:
+                    pass
+
+                try:
+                    bot_reply = superadmin_llm_fallback(user_text, pro_id_str)
+                except Exception as e:
+                    try:
+                        logger.error(f"[STAFF BOT 2M ERROR] {e}")
+                    except Exception:
+                        pass
+                    bot_reply = "An internal error occurred while processing this request."
+
+                if not bot_reply:
+                    return
+
+                bot_local = ensure_bot_user()
+                m_bot = Message(
+                    chatroom_id=chat.id,
+                    message_by=bot_local.id,
+                    message=bot_reply,
+                    is_file=False,
+                    path=None,
+                    is_bot=True,
+                ).save()
+
+                room_broadcast(
+                    chat_id,
+                    {
+                        "type": "message",
+                        "from": "bot",
+                        "message": bot_reply,
+                        "message_id": str(m_bot.id),
+                        "chat_id": chat_id,
+                        "created_time": m_bot.created_time.isoformat(),
+                    },
+                )
+
+            try:
+                with PENDING_LOCK:
+                    PENDING_USER_TEXT[chat_id] = user_text
+                    t = Timer(120.0, _fire)
+                    PENDING_BOT_TIMERS[chat_id] = t
+                    t.daemon = True
+                    t.start()
+            except Exception:
+                pass
+
+        # ──────────────────────────────────────────────────────────────
+        # ✅ NEW: SUPPORT-ROOM 2m buffer reset logic (ADD-ONLY)
+        # This is the missing part for client->superadmin flow.
+        # Your timer must reset STAFF_ENGAGED so bot becomes instant again.
+        # ──────────────────────────────────────────────────────────────
+        # NOTE: If you already replaced schedule_bot_reply_after_2m globally, keep it.
+        # This local definition is add-only safety, and will override only inside this ws function.
+        def schedule_bot_reply_after_2m(chat, chat_id: str, user_text: str, user_id_str: str = None):
+            cancel_pending_bot_reply(chat_id)
+
+            def _fire():
+                try:
+                    with PENDING_LOCK:
+                        PENDING_BOT_TIMERS.pop(chat_id, None)
+                except Exception:
+                    pass
+
+                # ✅ CRITICAL: after fallback -> bot becomes instant again until staff speaks
+                try:
+                    STAFF_ENGAGED[chat_id] = False
+                except Exception:
+                    pass
+
+                try:
+                    if user_id_str:
+                        reply_lines = generate_bot_reply_lines(user_text, user_id_str)
+                    else:
+                        reply_lines = generate_bot_reply_lines(user_text)
+                except Exception:
+                    reply_lines = None
+
+                if not reply_lines:
+                    return
+
+                bot_local = ensure_bot_user()
+                m_bot = Message(
+                    chatroom_id=chat.id,
+                    message_by=bot_local.id,
+                    message="\n".join(reply_lines),
+                    is_file=False,
+                    path=None,
+                    is_bot=True,
+                ).save()
+
+                room_broadcast(
+                    chat_id,
+                    {
+                        "type": "message",
+                        "from": "bot",
+                        "message": "\n".join(reply_lines),
+                        "message_id": str(m_bot.id),
+                        "chat_id": chat_id,
+                        "created_time": m_bot.created_time.isoformat(),
+                    },
+                )
+
+            try:
+                with PENDING_LOCK:
+                    PENDING_USER_TEXT[chat_id] = user_text
+                    t = Timer(120.0, _fire)
+                    PENDING_BOT_TIMERS[chat_id] = t
+                    t.daemon = True
+                    t.start()
+            except Exception:
+                pass
+
+        # ──────────────────────────────────────────────────────────────
+        # ✅ NEW: CALL ESCALATION ROUTING HELPERS (ADD-ONLY)
+        # Flow:
+        # client(user) -> chat.super_admin_id
+        # master       -> chat.admin_id
+        # admin        -> chat.owner_id
+        # ──────────────────────────────────────────────────────────────
+        def _resolve_call_target(chat, caller_role: str):
+            try:
+                r = (caller_role or "").lower()
+                if r == "user":
+                    return "master", str(getattr(chat, "super_admin_id", "") or "")
+                if r == "master":
+                    return "admin", str(getattr(chat, "admin_id", "") or "")
+                if r == "admin":
+                    return "superadmin", str(getattr(chat, "owner_id", "") or "")
+                return None, ""
+            except Exception:
+                return None, ""
+
+        def _sock_send_role(role: str, target_id: str, payload: dict) -> bool:
+            try:
+                rr = (role or "").lower()
+                if rr == "admin":
+                    return bool(_sock_send_any(ADMIN_SOCKETS, target_id, payload))
+                if rr == "superadmin":
+                    return bool(_sock_send_any(SUPERADMIN_SOCKETS, target_id, payload))
+                # master default
+                return bool(_sock_send_any(MASTER_SOCKETS, target_id, payload))
+            except Exception:
+                return False
+
         try:
             su = upsert_support_user_from_jwt()
             pro_id = su.user_id
@@ -621,11 +900,25 @@ def create_app() -> Flask:
             try:
                 if is_user:
                     _sock_add(USER_SOCKETS, su.user_id, ws)
-
-                # Your requirement: call between user and "master" (chat.super_admin_id).
-                # Register both SUPERADMIN_ROLE_ID and MASTER_ROLE_ID as "master endpoints".
                 if is_superadmin or is_master:
                     _sock_add(MASTER_SOCKETS, pro_id, ws)
+            except Exception:
+                pass
+
+            # ──────────────────────────────────────────────────────────────
+            # ✅ NEW: register admin/superadmin buckets for call escalation (ADD-ONLY)
+            # ──────────────────────────────────────────────────────────────
+            try:
+                if is_admin:
+                    try:
+                        _sock_add(ADMIN_SOCKETS, pro_id, ws)
+                    except Exception:
+                        pass
+                if is_superadmin:
+                    try:
+                        _sock_add(SUPERADMIN_SOCKETS, pro_id, ws)
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -633,12 +926,68 @@ def create_app() -> Flask:
             qs_child_user_id = request.args.get("child_user_id")
 
             # ✅ NEW: ensure superadmin personal bot room exists (created once)
-            # (requires Chatroom.room_type support + ensure_staff_bot_room function)
             try:
                 if is_superadmin or is_admin or is_master:
-                    ensure_staff_bot_room(pro_id)
+                    ensured = ensure_staff_bot_room(pro_id)
+                    try:
+                        if ensured:
+                            staff_owner_id = getattr(su, "owner_id", None)
+                            staff_admin_id = getattr(su, "admin_id", None)
+
+                            if not staff_owner_id or (is_master and not staff_admin_id):
+                                derived_owner_id, derived_admin_id = _resolve_staff_links_from_clients(su.role, pro_id)
+                                if not staff_owner_id:
+                                    staff_owner_id = derived_owner_id
+                                if is_master and not staff_admin_id:
+                                    staff_admin_id = derived_admin_id
+
+                            try:
+                                if (getattr(ensured, "room_type", None) or "") != "staff_bot":
+                                    ensured.room_type = "staff_bot"
+                            except Exception:
+                                pass
+
+                            if is_superadmin:
+                                try:
+                                    if not getattr(ensured, "owner_id", None):
+                                        ensured.owner_id = pro_id
+                                except Exception:
+                                    pass
+
+                            if is_admin:
+                                try:
+                                    ensured.admin_id = pro_id
+                                except Exception:
+                                    pass
+                                try:
+                                    if staff_owner_id:
+                                        ensured.owner_id = staff_owner_id
+                                except Exception:
+                                    pass
+
+                            if is_master:
+                                try:
+                                    ensured.super_admin_id = pro_id
+                                except Exception:
+                                    pass
+                                try:
+                                    if staff_owner_id:
+                                        ensured.owner_id = staff_owner_id
+                                except Exception:
+                                    pass
+                                try:
+                                    if staff_admin_id:
+                                        ensured.admin_id = staff_admin_id
+                                except Exception:
+                                    pass
+
+                            try:
+                                ensured.save()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
             except Exception as e:
-                # do not block websocket if this fails; list will just omit it
                 print("ensure_staff_bot_room failed:", repr(e))
 
             if is_user:
@@ -652,7 +1001,7 @@ def create_app() -> Flask:
                 room_add(chat_id, ws)
                 mark_role_join(chat, conn_role, ws)
                 ws.send(json.dumps({"type": "joined", "chat_id": chat_id, "role": conn_role}))
-                last_activity["ts"] = time.time()  # ✅ touch
+                last_activity["ts"] = time.time()
             else:
                 # --- open a specific chatroom by id ---
                 if qs_chatroom_id:
@@ -662,12 +1011,11 @@ def create_app() -> Flask:
                         last_activity["ts"] = time.time()
                         return
 
-                    # ✅ NEW: allow superadmin to open ONLY own staff_bot room (if selected)
                     picked_room_type = (getattr(picked, "room_type", None) or "support")
                     is_staff_bot_room = (picked_room_type == "staff_bot")
 
                     if is_staff_bot_room:
-                        if str(getattr(picked, "user_id", "")) != str(pro_id):
+                        if not _staff_bot_allowed(picked, pro_id):
                             ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
                             last_activity["ts"] = time.time()
                             return
@@ -700,7 +1048,6 @@ def create_app() -> Flask:
                     chat = picked
                     chat_id = str(chat.id)
 
-                    # ✅ Ensure engaged state exists; default False
                     STAFF_ENGAGED.setdefault(chat_id, False)
 
                     room_add(chat_id, ws)
@@ -712,7 +1059,6 @@ def create_app() -> Flask:
                 elif qs_child_user_id:
                     chat = ensure_chatroom_for_pro(_oid(qs_child_user_id))
 
-                    # ✅ NEW: staff_bot room is not created via child_user_id path; keep existing auth
                     if is_superadmin:
                         if chat.owner_id and chat.owner_id != pro_id:
                             ws.send(json.dumps({"type": "error", "error": "forbidden_child_room"}))
@@ -740,7 +1086,6 @@ def create_app() -> Flask:
 
                     chat_id = str(chat.id)
 
-                    # ✅ Ensure engaged state exists; default False
                     STAFF_ENGAGED.setdefault(chat_id, False)
 
                     room_add(chat_id, ws)
@@ -765,23 +1110,25 @@ def create_app() -> Flask:
                         "is_admin_active",
                         "updated_time",
                         "created_time",
-                        # ✅ NEW: include room_type if exists; safe even if not on older docs
                         "room_type",
+                        "owner_id",
+                        "admin_id",
+                        "super_admin_id",
                     )
 
-                    # ✅ NEW: include superadmin staff_bot room in listing (without removing existing logic)
                     if is_superadmin:
                         try:
                             from mongoengine.queryset.visitor import Q
                             rooms = (
                                 Chatroom.objects(
-                                    Q(owner_id=pro_id) | Q(super_admin_id=pro_id) | Q(user_id=pro_id, room_type="staff_bot")
+                                    Q(owner_id=pro_id)
+                                    | Q(super_admin_id=pro_id)
+                                    | Q(user_id=pro_id, room_type="staff_bot")
                                 )
                                 .only(*base_fields)
                                 .order_by("-updated_time")
                             )
                         except Exception:
-                            # fallback to your old logic if Q is not available
                             rooms = (
                                 Chatroom.objects(owner_id=pro_id)
                                 .only(*base_fields)
@@ -850,7 +1197,6 @@ def create_app() -> Flask:
                                 "is_admin_active": bool(getattr(r, "is_admin_active", False)),
                                 "updated_time": _iso(getattr(r, "updated_time", None) or getattr(r, "created_time", None)),
                                 "user": meta_by_userid.get(str(getattr(r, "user_id", "")), {"name": "", "userName": "", "phone": ""}),
-                                # ✅ NEW: expose room_type to frontend for labeling (optional)
                                 "room_type": (getattr(r, "room_type", None) or "support"),
                             }
                             for r in rooms_list
@@ -893,12 +1239,11 @@ def create_app() -> Flask:
                         last_activity["ts"] = time.time()
                         continue
 
-                    # ✅ NEW: allow superadmin to select ONLY own staff_bot room
                     picked_room_type = (getattr(picked, "room_type", None) or "support")
                     is_staff_bot_room = (picked_room_type == "staff_bot")
 
                     if is_staff_bot_room:
-                        if str(getattr(picked, "user_id", "")) != str(pro_id):
+                        if not _staff_bot_allowed(picked, pro_id):
                             ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
                             last_activity["ts"] = time.time()
                             return
@@ -937,7 +1282,6 @@ def create_app() -> Flask:
                     chat = picked
                     chat_id = str(chat.id)
 
-                    # ✅ Ensure engaged state exists; default False
                     STAFF_ENGAGED.setdefault(chat_id, False)
 
                     room_add(chat_id, ws)
@@ -947,27 +1291,32 @@ def create_app() -> Flask:
                     continue
 
                 # ──────────────────────────────────────────────────────────────
-                # ✅ NEW: CALL SIGNALING LOGIC (ADD-ONLY)
+                # ✅ UPDATED: CALL SIGNALING LOGIC (ADD-ONLY / UPDATED BLOCK)
+                # Flow:
+                # - user   -> chat.super_admin_id
+                # - master -> chat.admin_id
+                # - admin  -> chat.owner_id
                 # ──────────────────────────────────────────────────────────────
                 if t.startswith("call."):
                     print("CALL BRANCH HIT:", t, "chat_id:", chat_id, "conn_role:", conn_role)
-                    # For calls we need a selected/ensured chatroom to know super_admin_id
                     if not chat or not chat_id:
                         ws.send(json.dumps({"type": "call.error", "error": "no_chat_selected"}))
                         last_activity["ts"] = time.time()
                         continue
 
+                    # keep legacy name (do not remove)
                     master_id = str(getattr(chat, "super_admin_id", "") or "")
 
-                    # User initiates call -> server sends popup event to master over /ws
                     if t == "call.start":
-                        if conn_role != "user":
-                            ws.send(json.dumps({"type": "call.error", "error": "only_user_can_start_call"}))
+                        # ✅ allow user/master/admin to initiate call
+                        if conn_role not in ("user", "master", "admin"):
+                            ws.send(json.dumps({"type": "call.error", "error": "forbidden_role_for_call"}))
                             last_activity["ts"] = time.time()
                             continue
 
-                        if not master_id:
-                            ws.send(json.dumps({"type": "call.error", "error": "no_master_assigned"}))
+                        target_role, target_id = _resolve_call_target(chat, conn_role)
+                        if not target_id:
+                            ws.send(json.dumps({"type": "call.error", "error": "no_target_assigned"}))
                             last_activity["ts"] = time.time()
                             continue
 
@@ -975,24 +1324,32 @@ def create_app() -> Flask:
                         ACTIVE_CALLS[call_id] = {
                             "chat_id": chat_id,
                             "user_id": str(getattr(chat, "user_id", "") or str(pro_id)),
-                            "master_id": master_id,
+                            # keep legacy key, now means "target id"
+                            "master_id": target_id,
                             "state": "ringing",
+                            # ✅ new metadata
+                            "target_role": target_role,
+                            "target_id": target_id,
+                            "caller_role": conn_role,
+                            "caller_id": str(pro_id),
                         }
 
-                        # Choose one:
-                        # - ring one master socket (default)
-                        ok = _sock_send_any(MASTER_SOCKETS, master_id, {
-                            "type": "call.incoming",
-                            "call_id": call_id,
-                            "chat_id": chat_id,
-                            "from_user_id": str(getattr(chat, "user_id", "") or ""),
-                        })
-                        # - or ring all master sockets:
-                        # ok = (_sock_send_all(MASTER_SOCKETS, master_id, {...}) > 0)
+                        ok = _sock_send_role(
+                            target_role,
+                            target_id,
+                            {
+                                "type": "call.incoming",
+                                "call_id": call_id,
+                                "chat_id": chat_id,
+                                "from_user_id": str(getattr(chat, "user_id", "") or ""),
+                                "from_role": conn_role,
+                                "to_role": target_role,
+                            },
+                        )
 
                         if not ok:
                             ACTIVE_CALLS.pop(call_id, None)
-                            ws.send(json.dumps({"type": "call.error", "error": "master_offline"}))
+                            ws.send(json.dumps({"type": "call.error", "error": "target_offline"}))
                             last_activity["ts"] = time.time()
                             continue
 
@@ -1000,7 +1357,6 @@ def create_app() -> Flask:
                         last_activity["ts"] = time.time()
                         continue
 
-                    # Master accepts
                     if t == "call.accept":
                         call_id = (data.get("call_id") or "").strip()
                         c = ACTIVE_CALLS.get(call_id)
@@ -1009,24 +1365,23 @@ def create_app() -> Flask:
                             last_activity["ts"] = time.time()
                             continue
 
-                        if str(pro_id) != c["master_id"]:
+                        if str(pro_id) != str(c.get("target_id") or c.get("master_id") or ""):
                             ws.send(json.dumps({"type": "call.error", "error": "forbidden"}))
                             last_activity["ts"] = time.time()
                             continue
 
                         c["state"] = "accepted"
 
-                        _sock_send_any(USER_SOCKETS, c["user_id"], {
-                            "type": "call.accepted",
-                            "call_id": call_id,
-                            "chat_id": c["chat_id"],
-                        })
+                        _sock_send_any(
+                            USER_SOCKETS,
+                            c["user_id"],
+                            {"type": "call.accepted", "call_id": call_id, "chat_id": c["chat_id"]},
+                        )
 
                         ws.send(json.dumps({"type": "call.accepted_ack", "call_id": call_id}))
                         last_activity["ts"] = time.time()
                         continue
 
-                    # Master rejects
                     if t == "call.reject":
                         call_id = (data.get("call_id") or "").strip()
                         c = ACTIVE_CALLS.pop(call_id, None)
@@ -1035,22 +1390,21 @@ def create_app() -> Flask:
                             last_activity["ts"] = time.time()
                             continue
 
-                        if str(pro_id) != c["master_id"]:
+                        if str(pro_id) != str(c.get("target_id") or c.get("master_id") or ""):
                             ws.send(json.dumps({"type": "call.error", "error": "forbidden"}))
                             last_activity["ts"] = time.time()
                             continue
 
-                        _sock_send_any(USER_SOCKETS, c["user_id"], {
-                            "type": "call.rejected",
-                            "call_id": call_id,
-                            "chat_id": c["chat_id"],
-                        })
+                        _sock_send_any(
+                            USER_SOCKETS,
+                            c["user_id"],
+                            {"type": "call.rejected", "call_id": call_id, "chat_id": c["chat_id"]},
+                        )
 
                         ws.send(json.dumps({"type": "call.rejected_ack", "call_id": call_id}))
                         last_activity["ts"] = time.time()
                         continue
 
-                    # Relay SDP/ICE between user and master (WebRTC signaling)
                     if t in ("call.offer", "call.answer", "call.ice"):
                         call_id = (data.get("call_id") or "").strip()
                         c = ACTIVE_CALLS.get(call_id)
@@ -1058,11 +1412,6 @@ def create_app() -> Flask:
                             ws.send(json.dumps({"type": "call.error", "error": "call_not_found"}))
                             last_activity["ts"] = time.time()
                             continue
-
-                        if conn_role == "user":
-                            dest_map, dest_id = MASTER_SOCKETS, c["master_id"]
-                        else:
-                            dest_map, dest_id = USER_SOCKETS, c["user_id"]
 
                         payload = {
                             "type": t,
@@ -1084,26 +1433,39 @@ def create_app() -> Flask:
                                 last_activity["ts"] = time.time()
                                 continue
 
-                        ok = _sock_send_any(dest_map, dest_id, payload)
+                        # ✅ routing:
+                        # user sends -> target (master/admin/superadmin)
+                        # staff sends -> user
+                        if conn_role == "user":
+                            ok = _sock_send_role(
+                                str(c.get("target_role") or "master"),
+                                str(c.get("target_id") or c.get("master_id") or ""),
+                                payload,
+                            )
+                        else:
+                            ok = _sock_send_any(USER_SOCKETS, c["user_id"], payload)
+
                         if not ok:
                             ws.send(json.dumps({"type": "call.error", "error": "peer_offline"}))
                         last_activity["ts"] = time.time()
                         continue
 
-                    # End call (either side)
                     if t == "call.end":
                         call_id = (data.get("call_id") or "").strip()
                         c = ACTIVE_CALLS.pop(call_id, None)
                         if c:
                             _sock_send_any(USER_SOCKETS, c["user_id"], {"type": "call.ended", "call_id": call_id, "chat_id": c["chat_id"]})
-                            _sock_send_any(MASTER_SOCKETS, c["master_id"], {"type": "call.ended", "call_id": call_id, "chat_id": c["chat_id"]})
+                            _sock_send_role(
+                                str(c.get("target_role") or "master"),
+                                str(c.get("target_id") or c.get("master_id") or ""),
+                                {"type": "call.ended", "call_id": call_id, "chat_id": c["chat_id"]},
+                            )
                         last_activity["ts"] = time.time()
                         continue
 
                     ws.send(json.dumps({"type": "call.error", "error": "unknown_call_type"}))
                     last_activity["ts"] = time.time()
                     continue
-                # ──────────────────────────────────────────────────────────────
 
                 if t == "message":
                     if not chat or not chat_id:
@@ -1117,11 +1479,9 @@ def create_app() -> Flask:
                         last_activity["ts"] = time.time()
                         continue
 
-                    # ✅ NEW: detect staff-bot room (superadmin personal room)
                     room_type = (getattr(chat, "room_type", None) or "support")
                     is_staff_bot_room = (room_type == "staff_bot")
 
-                    # ✅ DAILY LIMIT (ONLY FOR USER) - assumes you already have _can_ask_and_inc + WS_DAILY_USER_LIMIT defined
                     if bucket_role == "user":
                         user_id_str = str(getattr(su, "user_id", "") or getattr(su, "id", "") or "")
                         if not _can_ask_and_inc(user_id_str):
@@ -1171,36 +1531,74 @@ def create_app() -> Flask:
                         },
                     )
 
-                    # ✅ NEW: if staff is chatting in staff_bot room, allow bot reply (do NOT mark engaged/cancel)
-                    if is_superadmin and is_staff_bot_room:
+                    # ──────────────────────────────────────────────────────────────
+                    # ✅ NEW STAFF_BOT LOGIC (ADD-ONLY)
+                    # ──────────────────────────────────────────────────────────────
+                    if is_staff_bot_room:
                         try:
-                            bot_reply = superadmin_llm_fallback(text, str(pro_id))
-                        except Exception as e:
-                            logger.error(f"[SUPERADMIN BOT ERROR] {e}")
-                            bot_reply = "An internal error occurred while processing this request."
+                            _staff_bot_apply_engagement(chat, chat_id, conn_role)
 
-                        if bot_reply:
-                            bot = ensure_bot_user()
-                            m_bot = Message(
-                                chatroom_id=chat.id,
-                                message_by=bot.id,
-                                message=bot_reply,
-                                is_file=False,
-                                is_bot=True,
-                            ).save()
+                            engaged = bool(STAFF_ENGAGED.get(chat_id, False))
+                            staff_present = is_higher_staff_present(chat, conn_role, chat_id)
+                            sender_gets_bot = _staff_bot_sender_gets_bot(chat, conn_role)
 
-                            room_broadcast(
-                                chat_id,
-                                {
-                                    "type": "message",
-                                    "from": "bot",
-                                    "message": bot_reply,
-                                    "message_id": str(m_bot.id),
-                                    "chat_id": chat_id,
-                                    "created_time": m_bot.created_time.isoformat(),
-                                },
+                            kind = _staff_bot_room_kind(chat)
+                            lower_sender = (
+                                (kind == "master_room" and conn_role == "master")
+                                or (kind == "admin_room" and conn_role == "admin")
                             )
-                        continue
+
+                            # ✅ higher-staff message cancels pending timer (ADD-ONLY)
+                            try:
+                                if kind == "master_room" and conn_role in ("admin", "superadmin"):
+                                    cancel_pending_bot_reply(chat_id)
+                                elif kind == "admin_room" and conn_role == "superadmin":
+                                    cancel_pending_bot_reply(chat_id)
+                            except Exception:
+                                pass
+
+                            if sender_gets_bot and not engaged:
+                                try:
+                                    bot_reply = superadmin_llm_fallback(text, str(pro_id))
+                                except Exception as e:
+                                    logger.error(f"[STAFF BOT ERROR] {e}")
+                                    bot_reply = "An internal error occurred while processing this request."
+
+                                if bot_reply:
+                                    bot_local = ensure_bot_user()
+                                    m_bot = Message(
+                                        chatroom_id=chat.id,
+                                        message_by=bot_local.id,
+                                        message=bot_reply,
+                                        is_file=False,
+                                        is_bot=True,
+                                    ).save()
+
+                                    room_broadcast(
+                                        chat_id,
+                                        {
+                                            "type": "message",
+                                            "from": "bot",
+                                            "message": bot_reply,
+                                            "message_id": str(m_bot.id),
+                                            "chat_id": chat_id,
+                                            "created_time": m_bot.created_time.isoformat(),
+                                        },
+                                    )
+                                continue
+
+                            if engaged and lower_sender:
+                                schedule_staff_bot_reply_after_2m(chat, chat_id, text, str(pro_id))
+                                continue
+
+                            if engaged and staff_present:
+                                schedule_staff_bot_reply_after_2m(chat, chat_id, text, str(pro_id))
+                                continue
+
+                            continue
+                        except Exception:
+                            pass
+
                     # ✅ YOUR BOT/STAFF LOGIC (unchanged) for normal support rooms
                     if bucket_role != "user":
                         STAFF_ENGAGED[chat_id] = True
@@ -1210,17 +1608,18 @@ def create_app() -> Flask:
                     engaged = bool(STAFF_ENGAGED.get(chat_id, False))
                     staff_present = is_any_staff_present(chat_id)
 
+                    # ✅ SUPPORT ROOM RULE:
+                    # If not engaged -> bot answers immediately (even if staff is connected).
                     if not engaged:
-                        # Pass the user_id so the bot can look up trades/balance
                         user_id_str = str(su.user_id)
-                        reply_lines = generate_bot_reply_lines(text, user_id_str)  # <--- Added user_id
+                        reply_lines = generate_bot_reply_lines(text, user_id_str)
 
                         if reply_lines:
-                            bot_text = "\n".join(reply_lines)  # Now safe because reply_lines is a list
-                            bot = ensure_bot_user()
+                            bot_text = "\n".join(reply_lines)
+                            bot_local = ensure_bot_user()
                             m_bot = Message(
                                 chatroom_id=chat.id,
-                                message_by=bot.id,
+                                message_by=bot_local.id,
                                 message=bot_text,
                                 is_file=False,
                                 is_bot=True,
@@ -1239,16 +1638,21 @@ def create_app() -> Flask:
                             )
                         continue
 
+                    # ✅ SUPPORT ROOM FIX:
+                    # If engaged and staff is present -> schedule 2m.
+                    # IMPORTANT: pass user_id_str AND timer resets STAFF_ENGAGED -> bot becomes instant again.
                     if engaged and staff_present:
-                        schedule_bot_reply_after_2m(chat, chat_id, text)
+                        user_id_str = str(su.user_id)
+                        schedule_bot_reply_after_2m(chat, chat_id, text, user_id_str)
                         continue
 
+                    # Existing fallback path (kept)
                     reply_lines = generate_bot_reply_lines(text)
                     if reply_lines:
-                        bot = ensure_bot_user()
+                        bot_local = ensure_bot_user()
                         m_bot = Message(
                             chatroom_id=chat.id,
-                            message_by=bot.id,
+                            message_by=bot_local.id,
                             message="\n".join(reply_lines),
                             is_file=False,
                             path=None,
@@ -1287,6 +1691,24 @@ def create_app() -> Flask:
                         _sock_remove(USER_SOCKETS, su.user_id, ws)
                     if su.role in (config.SUPERADMIN_ROLE_ID, config.MASTER_ROLE_ID):
                         _sock_remove(MASTER_SOCKETS, su.user_id, ws)
+            except Exception:
+                pass
+
+            # ──────────────────────────────────────────────────────────────
+            # ✅ NEW: unregister admin/superadmin buckets for call escalation (ADD-ONLY)
+            # ──────────────────────────────────────────────────────────────
+            try:
+                if "su" in locals() and su:
+                    if su.role == config.ADMIN_ROLE_ID:
+                        try:
+                            _sock_remove(ADMIN_SOCKETS, su.user_id, ws)
+                        except Exception:
+                            pass
+                    if su.role == config.SUPERADMIN_ROLE_ID:
+                        try:
+                            _sock_remove(SUPERADMIN_SOCKETS, su.user_id, ws)
+                        except Exception:
+                            pass
             except Exception:
                 pass
 

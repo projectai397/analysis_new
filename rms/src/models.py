@@ -90,7 +90,7 @@ class Chatroom(me.Document):
     updated_time = me.DateTimeField(default=lambda: datetime.now(timezone.utc))
 
     def clean(self):
-        # auto-touch updated_time
+    # auto-touch updated_time
         self.updated_time = datetime.now(timezone.utc)
 
         # Enforce field requirements based on room_type
@@ -103,10 +103,16 @@ class Chatroom(me.Document):
             if not self.admin_id:
                 raise me.ValidationError("admin_id is required for support chatrooms")
         else:
-            # staff_bot room should not carry routing/ownership fields
-            self.owner_id = None
-            self.super_admin_id = None
-            self.admin_id = None
+            # ✅ staff_bot rooms MAY carry routing fields for staff-to-staff access.
+            # Do not wipe them; just keep them optional.
+            #
+            # Expected patterns:
+            # - Owner personal bot room: user_id=owner_id; owner_id set; admin_id/super_admin_id optional None
+            # - Admin bot room: user_id=admin_id; admin_id set; owner_id set
+            # - Master bot room: user_id=master_id; super_admin_id set; owner_id set; admin_id set
+            #
+            # No hard validation here to avoid blocking creation if mapping is incomplete.
+            pass
         
 class Message(me.Document):
     meta = {"db_alias": "support", "collection": "messages", "indexes": [("chatroom_id","created_time")]}

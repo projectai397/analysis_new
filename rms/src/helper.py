@@ -10,6 +10,7 @@ from difflib import SequenceMatcher
 from threading import Lock
 from typing import Any, Dict, Optional
 from dotenv import load_dotenv
+from src import config
 import jwt
 from collections import defaultdict
 import uuid
@@ -49,6 +50,8 @@ WS_DAILY_USER_LIMIT     = int(os.getenv("WS_DAILY_USER_LIMIT", "20"))       # 20
 _DAILY_QA_COUNTS = {}
 MASTER_SOCKETS = defaultdict(set)  # master_user_id(str) -> set(ws)
 USER_SOCKETS   = defaultdict(set)  # user_id(str) -> set(ws)
+ADMIN_SOCKETS = defaultdict(set)
+SUPERADMIN_SOCKETS = defaultdict(set)
 ACTIVE_CALLS = {}  # call_id -> {"chat_id": str, "user_id": str, "master_id": str, "state": str}
 # MongoDB Setup
 MONGO_URI = os.getenv("SOURCE_MONGO_URI")
@@ -1158,6 +1161,56 @@ def ensure_chatroom_for_pro(pro_id: ObjectId) -> Optional[Chatroom]:
 def ensure_staff_bot_room(pro_id: ObjectId) -> Chatroom:
     now = datetime.now(timezone.utc)
 
+    # Resolve role/parent chain from SCUser / pro.users
+    su = SCUser.objects(user_id=pro_id).first()
+    if not su:
+        pro_doc = PRO_USER_COLL.find_one(
+            {"_id": _to_oid(pro_id)},
+            {"_id": 1, "role": 1, "parentId": 1},
+        )
+        role_oid = _to_oid(pro_doc.get("role")) if pro_doc else None
+        parent_oid = _to_oid((pro_doc or {}).get("parentId"))
+    else:
+        role_oid = su.role
+        parent_oid = su.parent_id
+
+    is_owner = role_oid == config.SUPERADMIN_ROLE_ID
+    is_admin = role_oid == config.ADMIN_ROLE_ID
+    is_master = role_oid == config.MASTER_ROLE_ID
+
+    # Compute linkage ids
+    owner_oid = None
+    admin_oid = None
+    master_oid = None
+
+    if is_owner:
+        owner_oid = pro_id
+        admin_oid = None
+        master_oid = None
+
+    elif is_admin:
+        # admin's parent is owner
+        admin_oid = pro_id
+        owner_oid = parent_oid
+        master_oid = None
+
+    elif is_master:
+        # master's parent is admin; admin's parent is owner
+        master_oid = pro_id
+        admin_oid = parent_oid
+
+        owner_from_admin = None
+        if admin_oid:
+            admin_doc = PRO_USER_COLL.find_one(
+                {"_id": _to_oid(admin_oid)},
+                {"parentId": 1},
+            )
+            if admin_doc and admin_doc.get("parentId"):
+                owner_from_admin = _to_oid(admin_doc["parentId"])
+
+        owner_oid = owner_from_admin or resolve_owner_superadmin_id(pro_id) or None
+
+    # Create or touch staff_bot room, and write fields on insert
     room = Chatroom.objects(
         user_id=pro_id,
         room_type="staff_bot",
@@ -1165,6 +1218,7 @@ def ensure_staff_bot_room(pro_id: ObjectId) -> Chatroom:
     ).modify(
         upsert=True,
         new=True,
+
         set__updated_time=now,
 
         set_on_insert__created_time=now,
@@ -1177,7 +1231,30 @@ def ensure_staff_bot_room(pro_id: ObjectId) -> Chatroom:
         set_on_insert__is_superadmin_active=False,
         set_on_insert__is_owner_active=False,
         set_on_insert__is_admin_active=False,
+
+        # ✅ NEW: write linkage fields ON INSERT
+        set_on_insert__owner_id=owner_oid,
+        set_on_insert__admin_id=admin_oid,
+        set_on_insert__super_admin_id=master_oid,
     )
+
+    # ✅ NEW: optional backfill if room already existed before this logic
+    # (safe, does not overwrite existing non-null values)
+    try:
+        updates = {}
+        if owner_oid and not getattr(room, "owner_id", None):
+            updates["set__owner_id"] = owner_oid
+        if admin_oid and not getattr(room, "admin_id", None):
+            updates["set__admin_id"] = admin_oid
+        if master_oid and not getattr(room, "super_admin_id", None):
+            updates["set__super_admin_id"] = master_oid
+
+        if updates:
+            updates["set__updated_time"] = now
+            Chatroom.objects(id=room.id).update_one(**updates)
+            room.reload()
+    except Exception:
+        pass
 
     return room
 
@@ -1900,6 +1977,34 @@ def is_any_staff_present(chat_id: str) -> bool:
         or len(roles.get("superadmin", set())) > 0
     )
 
+def is_higher_staff_present(chat, sender_role: str, chat_id: str) -> bool:
+    """
+    Returns True if a *higher-level* staff than sender_role
+    is present in this staff_bot room.
+    """
+    _ensure_presence_bucket(chat_id)
+    roles = PRESENCE.get(chat_id, {}).get("_roles", {})
+
+    has_owner = bool(getattr(chat, "owner_id", None))
+    has_admin = bool(getattr(chat, "admin_id", None))
+    has_master = bool(getattr(chat, "super_admin_id", None))
+
+    # Master staff_bot room: admin or superadmin counts as higher
+    if has_master and has_admin and has_owner:
+        if sender_role == "master":
+            return (
+                len(roles.get("admin", set())) > 0
+                or len(roles.get("superadmin", set())) > 0
+            )
+
+    # Admin staff_bot room: superadmin counts as higher
+    if (not has_master) and has_admin and has_owner:
+        if sender_role == "admin":
+            return len(roles.get("superadmin", set())) > 0
+
+    # Owner personal staff_bot room: no higher role
+    return False
+
 def cancel_pending_bot_reply(chat_id: str):
     with PENDING_LOCK:
         t = PENDING_BOT_TIMERS.pop(chat_id, None)
@@ -1938,17 +2043,27 @@ def generate_bot_reply_lines(text: str, user_id: str = None) -> list[str]:
 
     return []
 
-def schedule_bot_reply_after_2m(chat, chat_id: str, user_text: str):
+def schedule_bot_reply_after_2m(chat, chat_id: str, user_text: str, user_id_str: str = None):
     cancel_pending_bot_reply(chat_id)
 
     def _fire():
-        # If staff replied or staff left, we decide what to do:
-        # Requirement says: if staff present and no one answered -> bot replies.
-        # If staff left, bot can reply immediately anyway, so we still reply.
         with PENDING_LOCK:
             PENDING_BOT_TIMERS.pop(chat_id, None)
 
-        reply_lines = generate_bot_reply_lines(user_text)
+        # ─────────────────────────────────────────────
+        # ✅ CRITICAL FIX: reset engagement AFTER fallback
+        # This makes bot instant again until staff replies
+        # ─────────────────────────────────────────────
+        STAFF_ENGAGED[chat_id] = False
+
+        try:
+            if user_id_str:
+                reply_lines = generate_bot_reply_lines(user_text, user_id_str)
+            else:
+                reply_lines = generate_bot_reply_lines(user_text)
+        except Exception:
+            reply_lines = None
+
         if not reply_lines:
             return
 
@@ -2007,52 +2122,157 @@ def _can_ask_and_inc(user_id_str: str) -> bool:
 #calling
 
 def _sock_add(sock_map, user_id, ws):
-    sock_map[str(user_id)].add(ws)
+    uid = str(user_id)
+    if uid not in sock_map:
+        sock_map[uid] = set()
+    sock_map[uid].add(ws)  # Add WebSocket connection to the map
+    logger.info(f"User {user_id} connected. Total active sockets: {len(sock_map[uid])}")
 
 def _sock_remove(sock_map, user_id, ws):
     uid = str(user_id)
-    s = sock_map.get(uid)
-    if not s:
+    sockets = sock_map.get(uid)
+    if not sockets:
         return
-    s.discard(ws)
-    if not s:
+    sockets.discard(ws)  # Remove WebSocket connection from the map
+    if not sockets:  # No active sockets for the user, remove entry
         sock_map.pop(uid, None)
+    logger.info(f"User {user_id} disconnected. Total active sockets: {len(sockets)}")
 
 def _sock_send_any(sock_map, user_id, payload):
-    """Send to any one active socket for that user."""
-    uid = str(user_id)
-    sockets = sock_map.get(uid)
-    if not sockets:
+    """Send a message to any active socket for that user."""
+    try:
+        uid = str(user_id)
+        sockets = sock_map.get(uid)
+        if not sockets:
+            logger.warning(f"No active sockets found for user {user_id}")
+            return False
+        
+        msg = json.dumps(payload)
+        for w in list(sockets):
+            try:
+                w.send(msg)
+                logger.info(f"Message sent to user {user_id} via socket {w}")
+                return True
+            except Exception as e:
+                logger.error(f"Error sending message to user {user_id} via socket {w}: {e}")
+                sockets.discard(w)
+        
+        if not sockets:
+            sock_map.pop(uid, None)
+            logger.info(f"No active sockets left for user {user_id}. Removing from socket map.")
+        
         return False
-    msg = json.dumps(payload)
-    for w in list(sockets):
-        try:
-            w.send(msg)
-            return True
-        except Exception:
-            sockets.discard(w)
-    if not sockets:
-        sock_map.pop(uid, None)
-    return False
+    except Exception as e:
+        logger.error(f"Error sending message to user {user_id}: {e}")
+        return False
 
 def _sock_send_all(sock_map, user_id, payload):
-    """Send to all active sockets for that user (ring on all devices/tabs)."""
-    uid = str(user_id)
-    sockets = sock_map.get(uid)
-    if not sockets:
+    """Send a message to all active sockets for that user."""
+    try:
+        uid = str(user_id)
+        sockets = sock_map.get(uid)
+        if not sockets:
+            logger.warning(f"No active sockets found for user {user_id}")
+            return 0
+        
+        msg = json.dumps(payload)
+        sent = 0
+        for w in list(sockets):
+            try:
+                w.send(msg)
+                sent += 1
+                logger.info(f"Message sent to user {user_id} via socket {w}")
+            except Exception as e:
+                logger.error(f"Error sending message to user {user_id} via socket {w}: {e}")
+                sockets.discard(w)
+        
+        if not sockets:
+            sock_map.pop(uid, None)
+            logger.info(f"No active sockets left for user {user_id}. Removing from socket map.")
+        
+        return sent
+    except Exception as e:
+        logger.error(f"Error sending message to user {user_id}: {e}")
         return 0
-    msg = json.dumps(payload)
-    sent = 0
-    for w in list(sockets):
-        try:
-            w.send(msg)
-            sent += 1
-        except Exception:
-            sockets.discard(w)
-    if not sockets:
-        sock_map.pop(uid, None)
-    return sent
+    
+def _resolve_staff_links_from_clients(role, pro_id):
+    """
+    Returns (owner_id, admin_id) for the current staff user by deriving from client mappings.
+    owner_id = superadmin/owner
+    admin_id  = admin
+    """
+    try:
+        if role == config.MASTER_ROLE_ID:
+            doc = support_users_coll.find_one(
+                {"super_admin_id": pro_id},
+                {"owner_id": 1, "admin_id": 1},
+            )
+            if doc:
+                return doc.get("owner_id"), doc.get("admin_id")
+            return None, None
 
+        if role == config.ADMIN_ROLE_ID:
+            doc = support_users_coll.find_one(
+                {"admin_id": pro_id},
+                {"owner_id": 1},
+            )
+            if doc:
+                return doc.get("owner_id"), pro_id
+            return None, pro_id
+
+        if role == config.SUPERADMIN_ROLE_ID:
+            return pro_id, None
+
+        return None, None
+    except Exception:
+        return None, None
+    
+def _is_staff_bot_room(chat):
+    return (getattr(chat, "room_type", None) or "support") == "staff_bot"
+
+def _staff_bot_peers_present(chat_id, sender_role, ws_role_map=None):
+    """
+    Decide if a higher-level staff is present in the same staff_bot room.
+    ws_role_map is optional; if you don’t have per-socket role tracking,
+    we fallback to 'any staff present' check.
+    """
+    # If you already have a reliable "is_any_staff_present(chat_id)" which checks websocket members,
+    # keep using it. We’ll refine behavior using sender_role + chat doc membership.
+    try:
+        return is_any_staff_present(chat_id)
+    except Exception:
+        return False
+
+def _staff_bot_should_bot_reply(chat, sender_role):
+    """
+    Role-based gating:
+      - In Master room: bot replies for sender_role=='master' until admin/owner engages
+      - In Admin room: bot replies for sender_role=='admin' until owner engages
+      - In Owner room: bot replies for sender_role=='superadmin' (owner personal room)
+    We determine room type by which id fields are set on the chatroom document.
+    """
+    try:
+        has_owner = bool(getattr(chat, "owner_id", None))
+        has_admin = bool(getattr(chat, "admin_id", None))
+        has_master = bool(getattr(chat, "super_admin_id", None))
+
+        # Master room pattern: owner+admin+super_admin_id set
+        if has_master and has_admin and has_owner:
+            return sender_role == "master"
+
+        # Admin room pattern: owner+admin set, super_admin_id empty
+        if (not has_master) and has_admin and has_owner:
+            return sender_role == "admin"
+
+        # Owner personal room: owner set, admin/master empty
+        if has_owner and (not has_admin) and (not has_master):
+            return sender_role in ("superadmin", "owner")  # depending on your naming
+
+        # Fallback: allow bot reply only for superadmin
+        return sender_role == "superadmin"
+    except Exception:
+        return False
+    
 # ────────────────────── Exported symbols ──────────────────────
 __all__ = [
     "_oid",
@@ -2099,6 +2319,11 @@ __all__ = [
     "_sock_add",
     "_sock_remove",
     "_sock_send_any",
-    "_sock_send_all"
+    "_sock_send_all",
+    "_resolve_staff_links_from_clients",
+    "_staff_bot_should_bot_reply",
+    "_staff_bot_peers_present",
+    "_is_staff_bot_room",
+    "is_higher_staff_present"
     
 ]
