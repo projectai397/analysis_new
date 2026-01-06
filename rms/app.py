@@ -1,5 +1,6 @@
 # src/app.py
 from __future__ import annotations
+from fileinput import filename
 from waitress import serve
 import jwt
 import glob
@@ -12,7 +13,9 @@ import shutil
 import subprocess
 import threading
 import time
+from flask import send_from_directory
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 import schedule
@@ -46,13 +49,13 @@ from src.helper import (_oid, cache_get, cache_set, chatroom_with_messages,
                         msg_dict, now_ist_iso, repeated_user_questions,
                         room_add, room_broadcast, room_remove,
                         save_demo_message, upsert_support_user_from_jwt,is_any_staff_present,cancel_pending_bot_reply,generate_bot_reply_lines,schedule_bot_reply_after_2m,
-                        _can_ask_and_inc,ensure_staff_bot_room,superadmin_llm_fallback)
+                        _can_ask_and_inc,ensure_staff_bot_room,superadmin_llm_fallback,_sock_add,_sock_remove,_sock_send_any,_sock_send_all)
 # materializers (analytics)
 from src.helpers.build_service import (materialize_admins_analysis,
                                        materialize_masters_analysis,
                                        materialize_superadmins_analysis,
                                        materialize_superadmins_users)
-from src.helpers.s3 import backup_mongo_to_archive, upload_backup_to_s3,download_backup_from_s3
+from src.helpers.s3 import backup_mongo_to_archive, upload_backup_to_s3
 from src.helpers.util import sync_orders_to_trade
 from src.models import Chatroom, Message, ProUser, SCUser
 from werkzeug.utils import secure_filename
@@ -92,8 +95,15 @@ PENDING_BOT_TIMERS: dict[str, Timer] = {}
 PENDING_USER_TEXT: dict[str, str] = {}   # optional: keep last user question
 STAFF_ENGAGED: dict[str, bool] = {}
 WS_IDLE_TIMEOUT_SECONDS = int(os.getenv("WS_IDLE_TIMEOUT_SECONDS", "300"))   # 5 min default
-WS_DAILY_USER_LIMIT     = int(os.getenv("WS_DAILY_USER_LIMIT", "20"))       # 20 default
+WS_DAILY_USER_LIMIT     = int(os.getenv("WS_DAILY_USER_LIMIT", "40"))       # 20 default
 _DAILY_QA_COUNTS = {}
+UPLOAD_DIR = os.path.join(os.getcwd(), "call_recordings")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+MASTER_SOCKETS = defaultdict(set)  # master_user_id(str) -> set(ws)
+USER_SOCKETS   = defaultdict(set)  # user_id(str) -> set(ws)
+
+ACTIVE_CALLS = {}  # call_id -> {"chat_id": str, "user_id": str, "master_id": str, "state": str}
 # ─────────────────────────────────────────────────────────────
 # Analytics job runners
 # ─────────────────────────────────────────────────────────────
@@ -585,10 +595,10 @@ def create_app() -> Flask:
             pro_id = su.user_id
             bot = ensure_bot_user()
 
-            is_user        = su.role == USER_ROLE_ID
-            is_superadmin  = su.role == config.SUPERADMIN_ROLE_ID
-            is_admin       = su.role == config.ADMIN_ROLE_ID
-            is_master      = su.role == config.MASTER_ROLE_ID
+            is_user = su.role == USER_ROLE_ID
+            is_superadmin = su.role == config.SUPERADMIN_ROLE_ID
+            is_admin = su.role == config.ADMIN_ROLE_ID
+            is_master = su.role == config.MASTER_ROLE_ID
 
             # ✅ real role to send to frontend / mark presence
             if is_user:
@@ -605,17 +615,31 @@ def create_app() -> Flask:
             # 🧱 keep old 2-bucket logic for “user vs staff” behaviour
             bucket_role = "user" if is_user else "superadmin"
 
+            # ──────────────────────────────────────────────────────────────
+            # ✅ NEW: Global socket registration for user<->master call popup
+            # ──────────────────────────────────────────────────────────────
+            try:
+                if is_user:
+                    _sock_add(USER_SOCKETS, su.user_id, ws)
+
+                # Your requirement: call between user and "master" (chat.super_admin_id).
+                # Register both SUPERADMIN_ROLE_ID and MASTER_ROLE_ID as "master endpoints".
+                if is_superadmin or is_master:
+                    _sock_add(MASTER_SOCKETS, pro_id, ws)
+            except Exception:
+                pass
+
             qs_chatroom_id = request.args.get("chatroom_id")
             qs_child_user_id = request.args.get("child_user_id")
 
             # ✅ NEW: ensure superadmin personal bot room exists (created once)
             # (requires Chatroom.room_type support + ensure_staff_bot_room function)
             try:
-                if is_superadmin:
+                if is_superadmin or is_admin or is_master:
                     ensure_staff_bot_room(pro_id)
             except Exception as e:
                 # do not block websocket if this fails; list will just omit it
-                 print("ensure_staff_bot_room failed:", repr(e))
+                print("ensure_staff_bot_room failed:", repr(e))
 
             if is_user:
                 chat = ensure_chatroom_for_pro(pro_id)
@@ -627,12 +651,8 @@ def create_app() -> Flask:
                 conn_role = "user"
                 room_add(chat_id, ws)
                 mark_role_join(chat, conn_role, ws)
-                ws.send(
-                    json.dumps(
-                        {"type": "joined", "chat_id": chat_id, "role": conn_role}
-                    )
-                )
-                last_activity["ts"] = time.time()   # ✅ touch
+                ws.send(json.dumps({"type": "joined", "chat_id": chat_id, "role": conn_role}))
+                last_activity["ts"] = time.time()  # ✅ touch
             else:
                 # --- open a specific chatroom by id ---
                 if qs_chatroom_id:
@@ -657,11 +677,7 @@ def create_app() -> Flask:
                                 ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
                                 last_activity["ts"] = time.time()
                                 return
-                            if (
-                                not picked.owner_id
-                                and picked.super_admin_id
-                                and picked.super_admin_id != pro_id
-                            ):
+                            if (not picked.owner_id and picked.super_admin_id and picked.super_admin_id != pro_id):
                                 ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
                                 last_activity["ts"] = time.time()
                                 return
@@ -702,11 +718,7 @@ def create_app() -> Flask:
                             ws.send(json.dumps({"type": "error", "error": "forbidden_child_room"}))
                             last_activity["ts"] = time.time()
                             return
-                        if (
-                            not chat.owner_id
-                            and chat.super_admin_id
-                            and chat.super_admin_id != pro_id
-                        ):
+                        if (not chat.owner_id and chat.super_admin_id and chat.super_admin_id != pro_id):
                             ws.send(json.dumps({"type": "error", "error": "forbidden_child_room"}))
                             last_activity["ts"] = time.time()
                             return
@@ -896,11 +908,7 @@ def create_app() -> Flask:
                                 ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
                                 last_activity["ts"] = time.time()
                                 return
-                            if (
-                                not picked.owner_id
-                                and picked.super_admin_id
-                                and picked.super_admin_id != pro_id
-                            ):
+                            if (not picked.owner_id and picked.super_admin_id and picked.super_admin_id != pro_id):
                                 ws.send(json.dumps({"type": "error", "error": "forbidden_chatroom"}))
                                 last_activity["ts"] = time.time()
                                 return
@@ -937,6 +945,165 @@ def create_app() -> Flask:
                     ws.send(json.dumps({"type": "selected", "chat_id": chat_id, "role": conn_role}))
                     last_activity["ts"] = time.time()
                     continue
+
+                # ──────────────────────────────────────────────────────────────
+                # ✅ NEW: CALL SIGNALING LOGIC (ADD-ONLY)
+                # ──────────────────────────────────────────────────────────────
+                if t.startswith("call."):
+                    print("CALL BRANCH HIT:", t, "chat_id:", chat_id, "conn_role:", conn_role)
+                    # For calls we need a selected/ensured chatroom to know super_admin_id
+                    if not chat or not chat_id:
+                        ws.send(json.dumps({"type": "call.error", "error": "no_chat_selected"}))
+                        last_activity["ts"] = time.time()
+                        continue
+
+                    master_id = str(getattr(chat, "super_admin_id", "") or "")
+
+                    # User initiates call -> server sends popup event to master over /ws
+                    if t == "call.start":
+                        if conn_role != "user":
+                            ws.send(json.dumps({"type": "call.error", "error": "only_user_can_start_call"}))
+                            last_activity["ts"] = time.time()
+                            continue
+
+                        if not master_id:
+                            ws.send(json.dumps({"type": "call.error", "error": "no_master_assigned"}))
+                            last_activity["ts"] = time.time()
+                            continue
+
+                        call_id = uuid.uuid4().hex
+                        ACTIVE_CALLS[call_id] = {
+                            "chat_id": chat_id,
+                            "user_id": str(getattr(chat, "user_id", "") or str(pro_id)),
+                            "master_id": master_id,
+                            "state": "ringing",
+                        }
+
+                        # Choose one:
+                        # - ring one master socket (default)
+                        ok = _sock_send_any(MASTER_SOCKETS, master_id, {
+                            "type": "call.incoming",
+                            "call_id": call_id,
+                            "chat_id": chat_id,
+                            "from_user_id": str(getattr(chat, "user_id", "") or ""),
+                        })
+                        # - or ring all master sockets:
+                        # ok = (_sock_send_all(MASTER_SOCKETS, master_id, {...}) > 0)
+
+                        if not ok:
+                            ACTIVE_CALLS.pop(call_id, None)
+                            ws.send(json.dumps({"type": "call.error", "error": "master_offline"}))
+                            last_activity["ts"] = time.time()
+                            continue
+
+                        ws.send(json.dumps({"type": "call.ringing", "call_id": call_id, "chat_id": chat_id}))
+                        last_activity["ts"] = time.time()
+                        continue
+
+                    # Master accepts
+                    if t == "call.accept":
+                        call_id = (data.get("call_id") or "").strip()
+                        c = ACTIVE_CALLS.get(call_id)
+                        if not c:
+                            ws.send(json.dumps({"type": "call.error", "error": "call_not_found"}))
+                            last_activity["ts"] = time.time()
+                            continue
+
+                        if str(pro_id) != c["master_id"]:
+                            ws.send(json.dumps({"type": "call.error", "error": "forbidden"}))
+                            last_activity["ts"] = time.time()
+                            continue
+
+                        c["state"] = "accepted"
+
+                        _sock_send_any(USER_SOCKETS, c["user_id"], {
+                            "type": "call.accepted",
+                            "call_id": call_id,
+                            "chat_id": c["chat_id"],
+                        })
+
+                        ws.send(json.dumps({"type": "call.accepted_ack", "call_id": call_id}))
+                        last_activity["ts"] = time.time()
+                        continue
+
+                    # Master rejects
+                    if t == "call.reject":
+                        call_id = (data.get("call_id") or "").strip()
+                        c = ACTIVE_CALLS.pop(call_id, None)
+                        if not c:
+                            ws.send(json.dumps({"type": "call.error", "error": "call_not_found"}))
+                            last_activity["ts"] = time.time()
+                            continue
+
+                        if str(pro_id) != c["master_id"]:
+                            ws.send(json.dumps({"type": "call.error", "error": "forbidden"}))
+                            last_activity["ts"] = time.time()
+                            continue
+
+                        _sock_send_any(USER_SOCKETS, c["user_id"], {
+                            "type": "call.rejected",
+                            "call_id": call_id,
+                            "chat_id": c["chat_id"],
+                        })
+
+                        ws.send(json.dumps({"type": "call.rejected_ack", "call_id": call_id}))
+                        last_activity["ts"] = time.time()
+                        continue
+
+                    # Relay SDP/ICE between user and master (WebRTC signaling)
+                    if t in ("call.offer", "call.answer", "call.ice"):
+                        call_id = (data.get("call_id") or "").strip()
+                        c = ACTIVE_CALLS.get(call_id)
+                        if not c:
+                            ws.send(json.dumps({"type": "call.error", "error": "call_not_found"}))
+                            last_activity["ts"] = time.time()
+                            continue
+
+                        if conn_role == "user":
+                            dest_map, dest_id = MASTER_SOCKETS, c["master_id"]
+                        else:
+                            dest_map, dest_id = USER_SOCKETS, c["user_id"]
+
+                        payload = {
+                            "type": t,
+                            "call_id": call_id,
+                            "chat_id": c["chat_id"],
+                            "from_role": conn_role,
+                        }
+
+                        if t in ("call.offer", "call.answer"):
+                            payload["sdp"] = data.get("sdp")
+                            if not payload["sdp"]:
+                                ws.send(json.dumps({"type": "call.error", "error": "sdp_required"}))
+                                last_activity["ts"] = time.time()
+                                continue
+                        else:
+                            payload["candidate"] = data.get("candidate")
+                            if not payload["candidate"]:
+                                ws.send(json.dumps({"type": "call.error", "error": "candidate_required"}))
+                                last_activity["ts"] = time.time()
+                                continue
+
+                        ok = _sock_send_any(dest_map, dest_id, payload)
+                        if not ok:
+                            ws.send(json.dumps({"type": "call.error", "error": "peer_offline"}))
+                        last_activity["ts"] = time.time()
+                        continue
+
+                    # End call (either side)
+                    if t == "call.end":
+                        call_id = (data.get("call_id") or "").strip()
+                        c = ACTIVE_CALLS.pop(call_id, None)
+                        if c:
+                            _sock_send_any(USER_SOCKETS, c["user_id"], {"type": "call.ended", "call_id": call_id, "chat_id": c["chat_id"]})
+                            _sock_send_any(MASTER_SOCKETS, c["master_id"], {"type": "call.ended", "call_id": call_id, "chat_id": c["chat_id"]})
+                        last_activity["ts"] = time.time()
+                        continue
+
+                    ws.send(json.dumps({"type": "call.error", "error": "unknown_call_type"}))
+                    last_activity["ts"] = time.time()
+                    continue
+                # ──────────────────────────────────────────────────────────────
 
                 if t == "message":
                     if not chat or not chat_id:
@@ -1111,6 +1278,18 @@ def create_app() -> Flask:
         finally:
             stop_watchdog.set()  # ✅ stop watchdog thread
 
+            # ──────────────────────────────────────────────────────────────
+            # ✅ NEW: unregister presence sockets (ADD-ONLY)
+            # ──────────────────────────────────────────────────────────────
+            try:
+                if "su" in locals() and su:
+                    if su.role == USER_ROLE_ID:
+                        _sock_remove(USER_SOCKETS, su.user_id, ws)
+                    if su.role in (config.SUPERADMIN_ROLE_ID, config.MASTER_ROLE_ID):
+                        _sock_remove(MASTER_SOCKETS, su.user_id, ws)
+            except Exception:
+                pass
+
             if chat and chat_id:
                 try:
                     mark_role_leave(chat, conn_role, ws)
@@ -1230,7 +1409,7 @@ def create_app() -> Flask:
 
                 # Process message types
                 t = (data.get("type") or "").lower()
-
+                print("WS IN:", t)
                 if t == "ping":
                     # Handle ping-pong messages to check the connection
                     ws.send(json.dumps({"type": "pong"}))
@@ -1788,6 +1967,91 @@ def create_app() -> Flask:
             return jsonify({"role": role_label, "chatroom_ids": ids}), 200
         except Exception as e:
             return jsonify({"error": str(e)}), 400
+    
+    @app.route("/call/upload", methods=["POST"])
+    def upload_call_recording():
+        try:
+            f = request.files.get("file")
+            if not f:
+                return jsonify({"ok": False, "error": "file_required"}), 400
+
+            chat_id = (request.form.get("chat_id") or "nochat").strip()
+            call_id = (request.form.get("call_id") or "nocall").strip()
+            role = (request.form.get("role") or "unknown").strip()
+
+            # Ensure folder exists
+            os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+            # Make base name unique (prevents overwrite if you record multiple times)
+            # If you prefer overwrite behavior, remove rand_suffix.
+            rand_suffix = uuid.uuid4().hex[:10]
+            base = f"{chat_id}_{call_id}_{rand_suffix}_{role}"
+
+            # Detect extension from upload name (fallback .webm)
+            orig_name = f.filename or ""
+            ext = os.path.splitext(orig_name)[1].lower()
+            if ext not in [".webm", ".ogg", ".wav"]:
+                ext = ".webm"
+
+            # Save upload temporarily (WILL BE DELETED if not wav)
+            tmp_path = os.path.join(UPLOAD_DIR, base + ext)
+
+            # Final output: WAV only
+            wav_path = os.path.join(UPLOAD_DIR, base + ".wav")
+
+            f.save(tmp_path)
+
+            # If already WAV, just rename/move to the final wav_path
+            if ext == ".wav":
+                # Ensure final path is exactly .wav
+                os.replace(tmp_path, wav_path)
+                return jsonify({
+                    "ok": True,
+                    "wav": os.path.basename(wav_path)
+                })
+
+            # Convert to WAV (PCM 16-bit, mono, 48kHz)
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-i", tmp_path,
+                "-ac", "1",
+                "-ar", "48000",
+                "-c:a", "pcm_s16le",
+                wav_path
+            ]
+
+            p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if p.returncode != 0:
+                # If conversion fails, keep tmp file for debugging
+                return jsonify({
+                    "ok": False,
+                    "error": "ffmpeg_failed",
+                    "stderr": p.stderr[-2000:]
+                }), 500
+
+            # ✅ IMPORTANT: delete original upload so folder contains ONLY WAV
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+            return jsonify({
+                "ok": True,
+                "wav": os.path.basename(wav_path)
+            })
+
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+
+
+    @app.route("/call/recordings/<path:filename>")
+    def get_recording(filename):
+        # Optional: protect so only .wav can be served
+        if not filename.lower().endswith(".wav"):
+            return jsonify({"ok": False, "error": "only_wav_allowed"}), 400
+
+        return send_from_directory(UPLOAD_DIR, filename, as_attachment=False)
 
     return app
 

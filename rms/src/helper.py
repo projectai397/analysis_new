@@ -11,6 +11,8 @@ from threading import Lock
 from typing import Any, Dict, Optional
 from dotenv import load_dotenv
 import jwt
+from collections import defaultdict
+import uuid
 from threading import Lock, Timer
 from zoneinfo import ZoneInfo
 import requests
@@ -45,7 +47,9 @@ BOT_REPLY_DELAY_SECONDS = 120
 WS_IDLE_TIMEOUT_SECONDS = int(os.getenv("WS_IDLE_TIMEOUT_SECONDS", "300"))   # 5 min default
 WS_DAILY_USER_LIMIT     = int(os.getenv("WS_DAILY_USER_LIMIT", "20"))       # 20 default
 _DAILY_QA_COUNTS = {}
-
+MASTER_SOCKETS = defaultdict(set)  # master_user_id(str) -> set(ws)
+USER_SOCKETS   = defaultdict(set)  # user_id(str) -> set(ws)
+ACTIVE_CALLS = {}  # call_id -> {"chat_id": str, "user_id": str, "master_id": str, "state": str}
 # MongoDB Setup
 MONGO_URI = os.getenv("SOURCE_MONGO_URI")
 DB_NAME = os.getenv("SOURCE_DB_NAME")
@@ -2000,6 +2004,55 @@ def _can_ask_and_inc(user_id_str: str) -> bool:
             _DAILY_QA_COUNTS.pop(k, None)
 
     return True
+#calling
+
+def _sock_add(sock_map, user_id, ws):
+    sock_map[str(user_id)].add(ws)
+
+def _sock_remove(sock_map, user_id, ws):
+    uid = str(user_id)
+    s = sock_map.get(uid)
+    if not s:
+        return
+    s.discard(ws)
+    if not s:
+        sock_map.pop(uid, None)
+
+def _sock_send_any(sock_map, user_id, payload):
+    """Send to any one active socket for that user."""
+    uid = str(user_id)
+    sockets = sock_map.get(uid)
+    if not sockets:
+        return False
+    msg = json.dumps(payload)
+    for w in list(sockets):
+        try:
+            w.send(msg)
+            return True
+        except Exception:
+            sockets.discard(w)
+    if not sockets:
+        sock_map.pop(uid, None)
+    return False
+
+def _sock_send_all(sock_map, user_id, payload):
+    """Send to all active sockets for that user (ring on all devices/tabs)."""
+    uid = str(user_id)
+    sockets = sock_map.get(uid)
+    if not sockets:
+        return 0
+    msg = json.dumps(payload)
+    sent = 0
+    for w in list(sockets):
+        try:
+            w.send(msg)
+            sent += 1
+        except Exception:
+            sockets.discard(w)
+    if not sockets:
+        sock_map.pop(uid, None)
+    return sent
+
 # ────────────────────── Exported symbols ──────────────────────
 __all__ = [
     "_oid",
@@ -2042,6 +2095,10 @@ __all__ = [
     "_utc_day_key",
     "_can_ask_and_inc",
     "ensure_staff_bot_room",
-    "superadmin_llm_fallback"
+    "superadmin_llm_fallback",
+    "_sock_add",
+    "_sock_remove",
+    "_sock_send_any",
+    "_sock_send_all"
     
 ]
