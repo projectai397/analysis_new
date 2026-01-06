@@ -389,7 +389,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             reply_markup=keyboard,
             parse_mode="HTML"
         )
-    remember_bot_message_from_message(update, start_btn_msg)
+        remember_bot_message_from_message(update, start_btn_msg)
 
     msg = await chat.send_message(
         text="Please enter your <b>username or phone number</b> to login.",
