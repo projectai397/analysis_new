@@ -89,6 +89,11 @@ def load_bots_config(json_path: str) -> list[dict]:
         missing = required - set(item.keys())
         if missing:
             raise ValueError(f"bots.json item #{i} missing keys: {sorted(missing)}")
+        
+        if "url" in item and item["url"] is not None:
+            if not isinstance(item["url"], str) or not item["url"].strip():
+                raise ValueError(f"bots.json item #{i} has invalid 'url' (must be a non-empty string)")
+
     return data
 
 def _normalize_oid_str(x) -> str | None:
@@ -127,12 +132,13 @@ def role_name_from_user(user: dict) -> str:
         # Fallback to the original logic if the role is a string/other
         rn = user.get("role_name") or user.get("role") or ""
         return str(rn).lower()
-    
-TRADING_WEBAPP = WebAppInfo(url="https://client.500x.exchange/")
-TRADING_BUTTON = InlineKeyboardButton(
-    "▶️ Start Trading",
-    web_app=TRADING_WEBAPP
-)
+
+def get_trading_button_from_context(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardButton | None:
+    url = (context.application.bot_data.get("trading_url") or "").strip()
+    if not url:
+        return None
+    return InlineKeyboardButton("▶️ Start Trading", web_app=WebAppInfo(url=url))
+
 async def safe_delete_message(bot, chat_id: int, message_id: int):
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
@@ -375,12 +381,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     else:
         logger.warning(f"Logo path missing/not found for {bot_name}: {logo_path}")
 
-    keyboard = InlineKeyboardMarkup([[TRADING_BUTTON]])
-    start_btn_msg = await chat.send_message(
-        text="▶️ Tap below to open the trading platform:",
-        reply_markup=keyboard,
-        parse_mode="HTML"
-    )
+    trading_button = get_trading_button_from_context(context)
+    if trading_button:
+        keyboard = InlineKeyboardMarkup([[trading_button]])
+        start_btn_msg = await chat.send_message(
+            text="▶️ Tap below to open the trading platform:",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
     remember_bot_message_from_message(update, start_btn_msg)
 
     msg = await chat.send_message(
@@ -699,25 +707,15 @@ async def handle_subscription_query(update: Update, context: ContextTypes.DEFAUL
     # 3. Update the Inline Button Message
     
     # Re-fetch the button after the action
-    subscribe_button, status_text = await get_subscription_button(chat_id, role) 
-    
-    # 🚨 FIX: Rebuild the keyboard with the TRADING_BUTTON
-    # We use the TRADING_BUTTON variable, assuming it is globally defined as a WebApp button (see point 1).
-    try:
-        # Assuming TRADING_BUTTON is globally available from the definition in point 1
-        keyboard = InlineKeyboardMarkup([
-            [subscribe_button], 
-            [TRADING_BUTTON] # 🔹 FIX: Re-add the Web App button here
-        ])
-    except NameError:
-        # Fallback if TRADING_BUTTON isn't globally accessible (less clean, but safer)
-        trading_webapp = WebAppInfo(url="https://client.500x.exchange/")
-        trading_button = InlineKeyboardButton("▶️ Start Trading", web_app=trading_webapp)
-        keyboard = InlineKeyboardMarkup([
-            [subscribe_button], 
-            [trading_button] 
-        ])
+    subscribe_button, status_text = await get_subscription_button(chat_id, role)
 
+    rows = [[subscribe_button]]
+
+    trading_button = get_trading_button_from_context(context)
+    if trading_button:
+        rows.append([trading_button])
+
+    keyboard = InlineKeyboardMarkup(rows)
 
     await query.edit_message_text(
         text=f"✅ Successfully **{action_text}**.\n\n{status_text}",
@@ -1326,7 +1324,7 @@ async def _set_bot_commands(app):
 
     await app.bot.set_my_commands(commands, scope=BotCommandScopeDefault())
     await app.bot.set_my_commands(commands, scope=BotCommandScopeAllPrivateChats())
-def build_application(token: str, bot_name: str, logo_path: str):
+def build_application(token: str, bot_name: str, logo_path: str, trading_url: str | None):
     """
     Initializes the bot application and registers various handlers.
     Fixed to pass the 'app' instance to the trade listener to avoid global errors.
@@ -1335,6 +1333,7 @@ def build_application(token: str, bot_name: str, logo_path: str):
     app = ApplicationBuilder().token(token).build()
     app.bot_data["bot_name"] = bot_name
     app.bot_data["logo_path"] = logo_path
+    app.bot_data["trading_url"] = trading_url or ""
     # 2. Register authentication handlers (Login flow)
     register_auth_handlers(app)
 
@@ -1371,8 +1370,8 @@ def build_application(token: str, bot_name: str, logo_path: str):
     return app
 
 
-async def start_bot(token: str, bot_name: str, logo_path: str):
-    app = build_application(token, bot_name, logo_path)
+async def start_bot(token: str, bot_name: str, logo_path: str, trading_url: str | None):
+    app = build_application(token, bot_name, logo_path, trading_url)
 
     await app.initialize()
 
@@ -1389,14 +1388,14 @@ async def start_bot(token: str, bot_name: str, logo_path: str):
         await app.stop()
         await app.shutdown()
 
-def run_bot_instance(token: str, bot_name: str, logo_path: str):
+def run_bot_instance(token: str, bot_name: str, logo_path: str, trading_url: str | None):
     try:
         logger.info(f"🚀 Starting bot: {bot_name}")
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        loop.run_until_complete(start_bot(token, bot_name, logo_path))
+        loop.run_until_complete(start_bot(token, bot_name, logo_path, trading_url))
     except Exception as e:
         logger.exception(f"Bot '{bot_name}' crashed: {e}")
 
@@ -1410,10 +1409,11 @@ def run_multiple_bots():
         token = b["token"]
         bot_name = b["name"]
         logo_path = b["logo_path"]
+        trading_url = b.get("url")
 
         thread = threading.Thread(
             target=run_bot_instance,
-            args=(token, bot_name, logo_path),
+            args=(token, bot_name, logo_path, trading_url),
             daemon=True
         )
         threads.append(thread)
