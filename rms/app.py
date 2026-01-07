@@ -1372,9 +1372,11 @@ def create_app() -> Flask:
 
                         c["state"] = "accepted"
 
-                        _sock_send_any(
-                            USER_SOCKETS,
-                            c["user_id"],
+                        caller_role = c.get("caller_role", "user")
+                        caller_id = c.get("caller_id", c.get("user_id", ""))
+                        _sock_send_role(
+                            caller_role,
+                            caller_id,
                             {"type": "call.accepted", "call_id": call_id, "chat_id": c["chat_id"]},
                         )
 
@@ -1395,9 +1397,11 @@ def create_app() -> Flask:
                             last_activity["ts"] = time.time()
                             continue
 
-                        _sock_send_any(
-                            USER_SOCKETS,
-                            c["user_id"],
+                        caller_role = c.get("caller_role", "user")
+                        caller_id = c.get("caller_id", c.get("user_id", ""))
+                        _sock_send_role(
+                            caller_role,
+                            caller_id,
                             {"type": "call.rejected", "call_id": call_id, "chat_id": c["chat_id"]},
                         )
 
@@ -1433,17 +1437,25 @@ def create_app() -> Flask:
                                 last_activity["ts"] = time.time()
                                 continue
 
-                        # ✅ routing:
-                        # user sends -> target (master/admin/superadmin)
-                        # staff sends -> user
-                        if conn_role == "user":
+                        # ✅ routing: determine peer based on who is sending
+                        caller_id = str(c.get("caller_id", "") or c.get("user_id", ""))
+                        target_id = str(c.get("target_id", "") or c.get("master_id", ""))
+                        
+                        if str(pro_id) == caller_id:
+                            # Current sender is the caller, send to target
                             ok = _sock_send_role(
                                 str(c.get("target_role") or "master"),
-                                str(c.get("target_id") or c.get("master_id") or ""),
+                                target_id,
                                 payload,
                             )
                         else:
-                            ok = _sock_send_any(USER_SOCKETS, c["user_id"], payload)
+                            # Current sender is the target, send to caller
+                            caller_role = c.get("caller_role", "user")
+                            ok = _sock_send_role(
+                                caller_role,
+                                caller_id,
+                                payload,
+                            )
 
                         if not ok:
                             ws.send(json.dumps({"type": "call.error", "error": "peer_offline"}))
@@ -1454,7 +1466,13 @@ def create_app() -> Flask:
                         call_id = (data.get("call_id") or "").strip()
                         c = ACTIVE_CALLS.pop(call_id, None)
                         if c:
-                            _sock_send_any(USER_SOCKETS, c["user_id"], {"type": "call.ended", "call_id": call_id, "chat_id": c["chat_id"]})
+                            caller_role = c.get("caller_role", "user")
+                            caller_id = c.get("caller_id", c.get("user_id", ""))
+                            _sock_send_role(
+                                caller_role,
+                                caller_id,
+                                {"type": "call.ended", "call_id": call_id, "chat_id": c["chat_id"]},
+                            )
                             _sock_send_role(
                                 str(c.get("target_role") or "master"),
                                 str(c.get("target_id") or c.get("master_id") or ""),
