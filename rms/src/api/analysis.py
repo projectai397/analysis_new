@@ -12,6 +12,8 @@ from src.helpers.pipelines import weekly_kpi_pipeline
 from src.helpers.util import auth_superadmin
 from src.helpers.util import ist_week_window_now_for as week_window_now
 from src.helpers.util import resolve_caps_by_balance, try_object_id
+from src.helpers import hierarchy_service as hs
+from ..config import users
 
 from ..config import analysis as analysis_col
 from ..config import analysis_users as analysis_users_col
@@ -526,29 +528,113 @@ def _parse_iso(s: str | None) -> _dt | None:
             return None
 
 
+def _classify_role(role_val) -> str:
+    if not role_val:
+        return "unknown"
+    r = str(role_val)
+    if config.USER_ROLE_ID and r == str(config.USER_ROLE_ID):
+        return "user"
+    if config.SUPERADMIN_ROLE_ID and r == str(config.SUPERADMIN_ROLE_ID):
+        return "superadmin"
+    if config.ADMIN_ROLE_ID and r == str(config.ADMIN_ROLE_ID):
+        return "admin"
+    if config.MASTER_ROLE_ID and r == str(config.MASTER_ROLE_ID):
+        return "master"
+    return "unknown"
+
+
+def _get_current_user_role() -> str:
+    doc = users.find_one({"_id": g.current_user_oid}, {"role": 1})
+    if not doc:
+        return "unknown"
+    return _classify_role(doc.get("role"))
+
+
+def _get_user_ids_for_current_role() -> list[ObjectId]:
+    role = _get_current_user_role()
+    user_ids = []
+    
+    if role == "superadmin":
+        user_docs = hs.get_users_for_superadmin(g.current_user_oid)
+        for u in user_docs:
+            try:
+                uid = u.get("_id") or u.get("id")
+                if uid:
+                    user_ids.append(ObjectId(uid))
+            except Exception:
+                continue
+    elif role == "admin":
+        user_docs = hs.get_users_for_admin(g.current_user_oid)
+        for u in user_docs:
+            try:
+                uid = u.get("_id") or u.get("id")
+                if uid:
+                    user_ids.append(ObjectId(uid))
+            except Exception:
+                continue
+    elif role == "master":
+        user_docs = hs.get_users_for_master(g.current_user_oid)
+        for u in user_docs:
+            try:
+                uid = u.get("_id") or u.get("id")
+                if uid:
+                    user_ids.append(ObjectId(uid))
+            except Exception:
+                continue
+    
+    return user_ids
+
+
 @ns.route("/users/top-risk")
 class UsersTopRisk(Resource):
     method_decorators = [auth_superadmin]
 
     def get(self):
         try:
-            superadmin_id = request.args.get("superadmin_id")
+            role = _get_current_user_role()
+            if role == "user":
+                return {"ok": False, "error": "Access denied for role 'user'."}, 403
+            if role == "unknown":
+                return {"ok": False, "error": "Unknown role."}, 403
+
             start = _parse_iso(request.args.get("start"))
             end = _parse_iso(request.args.get("end"))
             min_score = float((request.args.get("min_score") or "0").strip() or "0")
 
-            # Build pipeline with very high limit once
-            pipeline = build_top_risk_users_pipeline(
-                limit=1000,  # fetch enough to slice
-                superadmin_id=superadmin_id,
-                start=start,
-                end=end,
-                min_score=min_score,
-            )
+            match_filter = {
+                "status": 1,
+                "avg_risk_score": {"$gte": float(min_score)},
+            }
+
+            if role == "superadmin":
+                match_filter["superadmin_id"] = g.current_user_oid
+            else:
+                user_ids = _get_user_ids_for_current_role()
+                if not user_ids:
+                    return {
+                        "ok": True,
+                        "count_total": 0,
+                        "top_10": [],
+                        "top_50": [],
+                        "top_100": [],
+                    }, 200
+                match_filter["user_id"] = {"$in": user_ids}
+
+            if start is not None:
+                match_filter.setdefault("window.start", {})["$gte"] = start
+            if end is not None:
+                match_filter.setdefault("window.end", {})["$lte"] = end
+
+            pipeline = [
+                {"$match": match_filter},
+                {"$addFields": {"_ars": {"$toDouble": "$avg_risk_score"}}},
+                {"$sort": {"_ars": -1, "total_volume": -1, "win_percent": -1, "generated_at": -1}},
+                {"$limit": 1000},
+                {"$project": {"_ars": 0}},
+            ]
 
             all_rows = list(analysis_users_col.aggregate(pipeline, allowDiskUse=True))
 
-            # Slice into 3 categories
             rows_10 = all_rows[:10]
             rows_50 = all_rows[:50]
             rows_100 = all_rows[:100]
@@ -570,20 +656,42 @@ class UserList(Resource):
     """
     GET /analysis/user-list?limit=10
     Returns N random active (status=1) users from analysis_users.
+    Filtered by the logged-in user's role (superadmin/admin/master).
     """
 
     method_decorators = [auth_superadmin]
 
     def get(self):
         try:
+            role = _get_current_user_role()
+            if role == "user":
+                return {"ok": False, "error": "Access denied for role 'user'."}, 403
+            if role == "unknown":
+                return {"ok": False, "error": "Unknown role."}, 403
+
             try:
                 limit = int(request.args.get("limit", 10))
             except (TypeError, ValueError):
                 limit = 10
             limit = max(1, min(limit, 50))
 
+            match_filter = {"status": 1}
+
+            if role == "superadmin":
+                match_filter["superadmin_id"] = g.current_user_oid
+            else:
+                user_ids = _get_user_ids_for_current_role()
+                if not user_ids:
+                    return {
+                        "ok": True,
+                        "count": 0,
+                        "limit": limit,
+                        "items": [],
+                    }, 200
+                match_filter["user_id"] = {"$in": user_ids}
+
             pipeline = [
-                {"$match": {"status": 1}},
+                {"$match": match_filter},
                 {"$sample": {"size": limit}},
                 {
                     "$project": {
