@@ -1,8 +1,11 @@
 from datetime import datetime as _dt
+import logging
 
 from bson import ObjectId
 from flask import g, request
 from flask_restx import Namespace, Resource
+
+logger = logging.getLogger(__name__)
 from src.helpers.pipelines import (_get_live_user_ids,
                                    build_top_risk_users_pipeline,
                                    kpi_pipeline_for_positions)
@@ -554,34 +557,43 @@ def _get_user_ids_for_current_role() -> list[ObjectId]:
     role = _get_current_user_role()
     user_ids = []
     
+    logger.info(f"_get_user_ids_for_current_role: role={role}, current_user_oid={g.current_user_oid}")
+    
     if role == "superadmin":
         user_docs = hs.get_users_for_superadmin(g.current_user_oid)
+        logger.info(f"get_users_for_superadmin returned {len(user_docs)} user docs")
         for u in user_docs:
             try:
                 uid = u.get("_id") or u.get("id")
                 if uid:
                     user_ids.append(ObjectId(uid))
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to convert user ID: {uid}, error: {e}")
                 continue
     elif role == "admin":
         user_docs = hs.get_users_for_admin(g.current_user_oid)
+        logger.info(f"get_users_for_admin returned {len(user_docs)} user docs")
         for u in user_docs:
             try:
                 uid = u.get("_id") or u.get("id")
                 if uid:
                     user_ids.append(ObjectId(uid))
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to convert user ID: {uid}, error: {e}")
                 continue
     elif role == "master":
         user_docs = hs.get_users_for_master(g.current_user_oid)
+        logger.info(f"get_users_for_master returned {len(user_docs)} user docs")
         for u in user_docs:
             try:
                 uid = u.get("_id") or u.get("id")
                 if uid:
                     user_ids.append(ObjectId(uid))
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to convert user ID: {uid}, error: {e}")
                 continue
     
+    logger.info(f"_get_user_ids_for_current_role: returning {len(user_ids)} user_ids: {[str(uid) for uid in user_ids[:10]]}")
     return user_ids
 
 
@@ -592,6 +604,8 @@ class UsersTopRisk(Resource):
     def get(self):
         try:
             role = _get_current_user_role()
+            logger.info(f"UsersTopRisk.get: role={role}, current_user_id={g.current_user_id}, current_user_oid={g.current_user_oid}")
+            
             if role == "user":
                 return {"ok": False, "error": "Access denied for role 'user'."}, 403
             if role == "unknown":
@@ -608,9 +622,12 @@ class UsersTopRisk(Resource):
 
             if role == "superadmin":
                 match_filter["superadmin_id"] = g.current_user_oid
+                logger.info(f"Filtering by superadmin_id: {g.current_user_oid}")
             else:
                 user_ids = _get_user_ids_for_current_role()
+                logger.info(f"Retrieved {len(user_ids)} user_ids for role {role}")
                 if not user_ids:
+                    logger.warning(f"No user_ids found for role {role}, returning empty result")
                     return {
                         "ok": True,
                         "count_total": 0,
@@ -619,11 +636,14 @@ class UsersTopRisk(Resource):
                         "top_100": [],
                     }, 200
                 match_filter["user_id"] = {"$in": user_ids}
+                logger.info(f"Filtering by user_id with {len(user_ids)} IDs: {[str(uid) for uid in user_ids[:5]]}...")
 
             if start is not None:
                 match_filter.setdefault("window.start", {})["$gte"] = start
             if end is not None:
                 match_filter.setdefault("window.end", {})["$lte"] = end
+
+            logger.info(f"Final match_filter: {match_filter}")
 
             pipeline = [
                 {"$match": match_filter},
@@ -634,6 +654,7 @@ class UsersTopRisk(Resource):
             ]
 
             all_rows = list(analysis_users_col.aggregate(pipeline, allowDiskUse=True))
+            logger.info(f"Aggregation returned {len(all_rows)} rows")
 
             rows_10 = all_rows[:10]
             rows_50 = all_rows[:50]
@@ -648,6 +669,7 @@ class UsersTopRisk(Resource):
             }, 200
 
         except Exception as e:
+            logger.error(f"Error in UsersTopRisk.get: {str(e)}", exc_info=True)
             return {"ok": False, "error": str(e)}, 500
 
 
@@ -664,6 +686,8 @@ class UserList(Resource):
     def get(self):
         try:
             role = _get_current_user_role()
+            logger.info(f"UserList.get: role={role}, current_user_id={g.current_user_id}, current_user_oid={g.current_user_oid}")
+            
             if role == "user":
                 return {"ok": False, "error": "Access denied for role 'user'."}, 403
             if role == "unknown":
@@ -679,9 +703,12 @@ class UserList(Resource):
 
             if role == "superadmin":
                 match_filter["superadmin_id"] = g.current_user_oid
+                logger.info(f"Filtering by superadmin_id: {g.current_user_oid}")
             else:
                 user_ids = _get_user_ids_for_current_role()
+                logger.info(f"Retrieved {len(user_ids)} user_ids for role {role}")
                 if not user_ids:
+                    logger.warning(f"No user_ids found for role {role}, returning empty result")
                     return {
                         "ok": True,
                         "count": 0,
@@ -689,6 +716,9 @@ class UserList(Resource):
                         "items": [],
                     }, 200
                 match_filter["user_id"] = {"$in": user_ids}
+                logger.info(f"Filtering by user_id with {len(user_ids)} IDs: {[str(uid) for uid in user_ids[:5]]}...")
+
+            logger.info(f"Final match_filter: {match_filter}")
 
             pipeline = [
                 {"$match": match_filter},
@@ -715,6 +745,7 @@ class UserList(Resource):
             ]
 
             docs = list(analysis_users_col.aggregate(pipeline, allowDiskUse=True))
+            logger.info(f"Aggregation returned {len(docs)} docs")
             return {
                 "ok": True,
                 "count": len(docs),
@@ -723,4 +754,5 @@ class UserList(Resource):
             }, 200
 
         except Exception as e:
+            logger.error(f"Error in UserList.get: {str(e)}", exc_info=True)
             return {"ok": False, "error": str(e)}, 500
