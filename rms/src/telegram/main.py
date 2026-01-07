@@ -1315,15 +1315,22 @@ async def _set_bot_commands(app):
     BotCommand("role_wise_trades", "Role-wise trades (Admin/Master/Client)"),
     BotCommand("trades", "View trades summary"),
     BotCommand("alerts", "View alerts summary"),
+    BotCommand("report", "Generate M2M reports"),
     BotCommand("me", "Who am I / role info"),
     BotCommand("cancel", "Cancel current operation"),
 ]
 
-    await app.bot.delete_my_commands(scope=BotCommandScopeDefault())
-    await app.bot.delete_my_commands(scope=BotCommandScopeAllPrivateChats())
-
-    await app.bot.set_my_commands(commands, scope=BotCommandScopeDefault())
-    await app.bot.set_my_commands(commands, scope=BotCommandScopeAllPrivateChats())
+    try:
+        await app.bot.delete_my_commands(scope=BotCommandScopeDefault())
+        await app.bot.delete_my_commands(scope=BotCommandScopeAllPrivateChats())
+    except Exception as e:
+        logger.warning(f"Failed to delete bot commands (non-critical): {e}")
+    
+    try:
+        await app.bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+        await app.bot.set_my_commands(commands, scope=BotCommandScopeAllPrivateChats())
+    except Exception as e:
+        logger.warning(f"Failed to set bot commands (non-critical): {e}")
 def build_application(token: str, bot_name: str, logo_path: str, trading_url: str | None):
     """
     Initializes the bot application and registers various handlers.
@@ -1346,6 +1353,7 @@ def build_application(token: str, bot_name: str, logo_path: str, trading_url: st
     from .transactions import register_transaction_handlers
     from .role_wise_transactions import register_role_wise_transaction_handlers
     from .role_wise_trades import register_role_wise_trade_handlers
+    from .report import register_report_handlers
 
     register_user_handlers(app)
     register_position_handlers(app)
@@ -1355,6 +1363,7 @@ def build_application(token: str, bot_name: str, logo_path: str, trading_url: st
     register_transaction_handlers(app)
     register_role_wise_transaction_handlers(app)
     register_role_wise_trade_handlers(app)
+    register_report_handlers(app)
 
     # 4. 🚨 CRITICAL FIX: Pass 'app' to the listener
     # This prevents the "Global 'app' not found" error in your threads.
@@ -1373,13 +1382,24 @@ def build_application(token: str, bot_name: str, logo_path: str, trading_url: st
 async def start_bot(token: str, bot_name: str, logo_path: str, trading_url: str | None):
     app = build_application(token, bot_name, logo_path, trading_url)
 
-    await app.initialize()
+    try:
+        await app.initialize()
+    except Exception as e:
+        logger.warning(f"Bot initialization timeout/error (will retry): {e}")
+        # Try to continue - sometimes the bot can still work
 
     # ✅ Explicitly set commands (no post_init)
-    await _set_bot_commands(app)
+    try:
+        await _set_bot_commands(app)
+    except Exception as e:
+        logger.warning(f"Failed to set bot commands (non-critical): {e}")
 
-    await app.start()
-    await app.updater.start_polling(drop_pending_updates=True)
+    try:
+        await app.start()
+        await app.updater.start_polling(drop_pending_updates=True)
+    except Exception as e:
+        logger.error(f"Failed to start bot polling: {e}")
+        raise  # Re-raise as this is critical
 
     try:
         while True:
