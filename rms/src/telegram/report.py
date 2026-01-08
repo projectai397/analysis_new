@@ -243,7 +243,7 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
         alignment=1,
     )
     
-    story.append(Paragraph("M2M Report", title_style))
+    story.append(Paragraph("Pnl Report", title_style))
     date_style = ParagraphStyle(
         'DateStyle',
         parent=styles['Normal'],
@@ -396,7 +396,7 @@ async def report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await require_login(update, context)
     
     keyboard = [
-        [InlineKeyboardButton("M2M", callback_data="report_m2m")],
+        [InlineKeyboardButton("Pnl Report", callback_data="report_m2m")],
         [InlineKeyboardButton("Script Wise PnL", callback_data="report_script_pnl")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -428,7 +428,7 @@ async def handle_m2m_report(query, user: dict):
     """Handle M2M report generation and sending."""
     msg = None
     try:
-        msg = await query.message.reply_text("⏳ Generating M2M report...")
+        msg = await query.message.reply_text("⏳ Generating Pnl report...")
         
         user_list = get_users_under_role(user)
         
@@ -461,8 +461,8 @@ async def handle_m2m_report(query, user: dict):
         pdf_buffer.seek(0)
         await query.message.reply_document(
             document=pdf_buffer,
-            filename=f"M2M_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-            caption=f"📊 M2M Report\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\nUsers: {len(user_list)}",
+            filename=f"Pnl{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            caption=f"📊 Pnl Report\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\nUsers: {len(user_list)}",
         )
         
         try:
@@ -471,7 +471,7 @@ async def handle_m2m_report(query, user: dict):
             pass
         
     except Exception as e:
-        logger.error(f"Error generating M2M report: {e}", exc_info=True)
+        logger.error(f"Error generating Pnl report: {e}", exc_info=True)
         error_msg = f"❌ Error generating report: {str(e)}"
         try:
             if msg:
