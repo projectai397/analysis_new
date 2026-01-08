@@ -50,36 +50,36 @@ def _norm(docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # Superadmin scope
 # =========================
 def get_admins_for_superadmin(sid_oid: ObjectId) -> List[Dict[str, Any]]:
-    cur = users.find({"role": config.ADMIN_ROLE_ID, **_parent_eq(sid_oid)}, _PROJECTION)
+    cur = users.find({"role": config.ADMIN_ROLE_ID, **_parent_eq(sid_oid), "isDemoAccount": {"$ne": True}}, _PROJECTION)
     return _norm(list(cur))
 
 def get_masters_for_superadmin(sid_oid: ObjectId) -> List[Dict[str, Any]]:
-    cur = users.find({"role": config.MASTER_ROLE_ID}, _PROJECTION)
+    cur = users.find({"role": config.MASTER_ROLE_ID, "isDemoAccount": {"$ne": True}}, _PROJECTION)
     return _norm(list(cur))
 
 def get_users_for_superadmin(sid_oid: ObjectId) -> List[Dict[str, Any]]:
-    cur = users.find({"role": config.USER_ROLE_ID}, _PROJECTION)
+    cur = users.find({"role": config.USER_ROLE_ID, "isDemoAccount": {"$ne": True}}, _PROJECTION)
     return _norm(list(cur))
 
 # =========================
 # Admin scope
 # =========================
 def get_masters_for_admin(admin_oid: ObjectId) -> List[Dict[str, Any]]:
-    cur = users.find({"role": config.MASTER_ROLE_ID, **_parent_eq(admin_oid)}, _PROJECTION)
+    cur = users.find({"role": config.MASTER_ROLE_ID, **_parent_eq(admin_oid), "isDemoAccount": {"$ne": True}}, _PROJECTION)
     return _norm(list(cur))
 
 def get_users_for_admin(admin_oid: ObjectId) -> List[Dict[str, Any]]:
-    master_ids = [m["_id"] for m in users.find({"role": config.MASTER_ROLE_ID, **_parent_eq(admin_oid)}, {"_id": 1})]
+    master_ids = [m["_id"] for m in users.find({"role": config.MASTER_ROLE_ID, **_parent_eq(admin_oid), "isDemoAccount": {"$ne": True}}, {"_id": 1})]
     if not master_ids:
         return []
-    cur = users.find({"role": config.USER_ROLE_ID, **_parent_in(master_ids)}, _PROJECTION)
+    cur = users.find({"role": config.USER_ROLE_ID, **_parent_in(master_ids), "isDemoAccount": {"$ne": True}}, _PROJECTION)
     return _norm(list(cur))
 
 # =========================
 # Master scope
 # =========================
 def get_users_for_master(master_oid: ObjectId) -> List[Dict[str, Any]]:
-    cur = users.find({"role": config.USER_ROLE_ID, **_parent_eq(master_oid)}, _PROJECTION)
+    cur = users.find({"role": config.USER_ROLE_ID, **_parent_eq(master_oid), "isDemoAccount": {"$ne": True}}, _PROJECTION)
     return _norm(list(cur))
 
 __all__ = [
