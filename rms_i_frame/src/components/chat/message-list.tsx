@@ -5,7 +5,7 @@ import type { ConversationItem, Role } from "@/lib/types"
 import { CheckCheck, Check, Clock, ChevronDown } from "lucide-react"
 
 export function MessageList({ items, viewerRole, searchQuery }: { items: ConversationItem[]; viewerRole: Role; searchQuery?: string }) {
-  const baseurl = process.env.NEXT_PUBLIC_API_BASE_URL;
+  const baseurl = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8013";
   const endRef = useRef<HTMLDivElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [highlightedIds, setHighlightedIds] = useState<Set<string>>(new Set())
@@ -339,14 +339,14 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
                     {isImageFile(m.file_type, m.file_name) && (
                       <div className="mb-1">
                         <a
-                          href={baseurl + m.file_url}
+                          href={m.file_url.startsWith("http") ? m.file_url : baseurl + m.file_url}
                           target="_blank"
                           rel="noreferrer"
                           className="block focus:outline-none focus:ring-2 focus:ring-[#008069] focus:ring-offset-2 rounded overflow-hidden"
                           aria-label={`View image: ${m.file_name || "Image"}`}
                         >
                           <img
-                            src={baseurl + m.file_url}
+                            src={m.file_url.startsWith("http") ? m.file_url : baseurl + m.file_url}
                             alt={m.file_name || "Image preview"}
                             className="w-12 h-12 object-cover rounded cursor-pointer hover:opacity-90 transition-opacity"
                             loading="lazy"
@@ -356,7 +356,7 @@ export function MessageList({ items, viewerRole, searchQuery }: { items: Convers
                     )}
                     <a
                       className="text-[#008069] dark:text-[#53bdeb] underline break-all hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-[#008069] focus:ring-offset-2 rounded"
-                      href={baseurl + m.file_url}
+                      href={m.file_url.startsWith("http") ? m.file_url : baseurl + m.file_url}
                       target="_blank"
                       rel="noreferrer"
                       aria-label={`Download file: ${m.file_name || "File"}`}

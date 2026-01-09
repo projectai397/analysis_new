@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>User WebRTC Test</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      height: 100vh;
+      overflow: hidden;
+      background: #f5f5dc;
+    }
+
+    #chatView {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    #callView {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      background: #ffffff;
+    }
+
+    .header {
+      background: #2d7a4f;
+      color: white;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: #17a085;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      font-size: 18px;
+      color: white;
+    }
+
+    .user-info {
+      flex: 1;
+    }
+
+    .user-name {
+      font-size: 16px;
+      font-weight: 500;
+      margin-bottom: 4px;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      opacity: 0.9;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #4ade80;
+    }
+
+    .chat-area {
+      flex: 1;
+      background: #f5f5dc;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow-y: auto;
+      padding: 20px;
+    }
+
+    .chat-placeholder {
+      color: #666;
+      font-size: 14px;
+    }
+
+    .call-button {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: #22c55e;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 12px rgba(34, 197, 94, 0.4);
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .call-button:hover {
+      transform: scale(1.05);
+      box-shadow: 0 6px 16px rgba(34, 197, 94, 0.5);
+    }
+
+    .call-button:active {
+      transform: scale(0.95);
+    }
+
+    .call-button svg {
+      width: 24px;
+      height: 24px;
+      fill: white;
+    }
+
+    .calling-text {
+      font-size: 24px;
+      color: #166534;
+      font-weight: 500;
+      margin-bottom: 48px;
+    }
+
+    .call-controls {
+      display: flex;
+      gap: 32px;
+      align-items: center;
+    }
+
+    .call-btn {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.2s;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    }
+
+    .call-btn:hover {
+      transform: scale(1.1);
+    }
+
+    .call-btn:active {
+      transform: scale(0.95);
+    }
+
+    .mic-btn {
+      background: #4b5563;
+    }
+
+    .mic-btn.muted {
+      background: #dc2626;
+    }
+
+    .hangup-btn {
+      background: #dc2626;
+    }
+
+    .call-btn svg {
+      width: 28px;
+      height: 28px;
+      fill: white;
+    }
+
+    #remoteAudio {
+      display: none;
+    }
+
+    .toaster {
+      position: fixed;
+      bottom: 100px;
+      right: 20px;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+      padding: 16px 20px;
+      min-width: 280px;
+      max-width: 320px;
+      z-index: 1000;
+      display: none;
+      animation: slideIn 0.3s ease-out;
+    }
+
+    .toaster.show {
+      display: block;
+    }
+
+    @keyframes slideIn {
+      from {
+        transform: translateX(100%) translateY(20px);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(0) translateY(0);
+        opacity: 1;
+      }
+    }
+
+    .toaster-content {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .toaster-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .toaster-icon.calling {
+      background: #22c55e;
+    }
+
+    .toaster-icon.incoming {
+      background: #3b82f6;
+    }
+
+    .toaster-icon.connected {
+      background: #22c55e;
+    }
+
+    .toaster-icon svg {
+      width: 20px;
+      height: 20px;
+      fill: white;
+    }
+
+    .toaster-info {
+      flex: 1;
+    }
+
+    .toaster-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #1f2937;
+      margin-bottom: 4px;
+    }
+
+    .toaster-status {
+      font-size: 12px;
+      color: #6b7280;
+    }
+
+    .toaster-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #e5e7eb;
+    }
+
+    .toaster-btn {
+      flex: 1;
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .toaster-btn.accept {
+      background: #22c55e;
+      color: white;
+    }
+
+    .toaster-btn.accept:hover {
+      background: #16a34a;
+    }
+
+    .toaster-btn.end {
+      background: #dc2626;
+      color: white;
+    }
+
+    .toaster-btn.end:hover {
+      background: #b91c1c;
+    }
+  </style>
+</head>
+<body>
+  <div id="chatView">
+    <div class="header">
+      <div class="avatar">U</div>
+      <div class="user-info">
+        <div class="user-name">User</div>
+        <div class="status">
+          <div class="status-dot"></div>
+          <span id="statusText">Connected</span>
+        </div>
+      </div>
+    </div>
+    <div class="chat-area">
+      <div class="chat-placeholder">Chat area placeholder</div>
+    </div>
+    <button class="call-button" id="callButton" onclick="startCall()">
+      <svg viewBox="0 0 24 24">
+        <path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56-.35-.12-.74-.03-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/>
+      </svg>
+    </button>
+  </div>
+
+  <div id="callView">
+    <div class="calling-text" id="callingText">Calling...</div>
+    <div class="call-controls">
+      <button class="call-btn mic-btn" id="micButton" onclick="toggleMute()">
+        <svg viewBox="0 0 24 24">
+          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+          <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+        </svg>
+      </button>
+      <button class="call-btn hangup-btn" id="hangupButton" onclick="endCall()">
+        <svg viewBox="0 0 24 24">
+          <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.69.28-.26 0-.51-.1-.69-.28L.28 13.62c-.18-.18-.28-.43-.28-.69 0-.26.1-.51.28-.69C3.34 8.78 7.46 7 12 7s8.66 1.78 11.72 4.24c.18.18.28.43.28.69 0 .26-.1.51-.28.69l-2.82 2.82c-.18.18-.43.28-.69.28-.26 0-.51-.1-.69-.28-.79-.74-1.69-1.36-2.66-1.85-.33-.16-.56-.5-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <audio id="remoteAudio" autoplay playsinline></audio>
+
+  <div id="callToaster" class="toaster">
+    <div class="toaster-content">
+      <div class="toaster-icon calling" id="toasterIcon">
+        <svg viewBox="0 0 24 24">
+          <path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56-.35-.12-.74-.03-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/>
+        </svg>
+      </div>
+      <div class="toaster-info">
+        <div class="toaster-title" id="toasterTitle">Calling...</div>
+        <div class="toaster-status" id="toasterStatus">Connecting to master</div>
+      </div>
+    </div>
+    <div class="toaster-actions" id="toasterActions">
+      <button class="toaster-btn end" onclick="endCall()">End Call</button>
+    </div>
+  </div>
+
+  <script>
+    const TOKEN =
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2OTRjMWM5NmYxYTcwOWU3NDM0ZDBhNmIiLCJuYW1lIjoiUEVSU09OQUwiLCJwaG9uZSI6IjkwOTA5MDkwOTAiLCJ1c2VyTmFtZSI6IlBFUlNPTkFMIiwicm9sZSI6IjY0YjYzNzU1YzcxNDYxYzUwMmVhNDcxNyIsImRldmljZUlkIjoiMWU0NTA3MTAtODVhNi00ZjVjLWFmMTYtNTQxNTAwOTM0YjU3IiwiZGV2aWNlVHlwZSI6ImRlc2t0b3AiLCJzZXF1ZW5jZSI6MjAwNTEsImlhdCI6MTc2NzkzNTE2MSwiZXhwIjoxNzY4NTM5OTYxfQ.m0is2qMhwv9e6IpCgDZQxnB_HuQjMz29ZDb_7lrXQj0"
+    const ROLE = "user";
+    const CHAT_ID = "";
+
+    const WS_URL = `ws://127.0.0.1:8013/ws?token=${TOKEN}`;
+
+    let ws = new WebSocket(WS_URL);
+    let pc = null;
+    let callId = null;
+    let localStream = null;
+    let remoteStream = null;
+    let isMuted = false;
+    let isCallActive = false;
+
+    const ice = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+    function showToaster(title, status, iconType) {
+      const toaster = document.getElementById('callToaster');
+      const toasterTitle = document.getElementById('toasterTitle');
+      const toasterStatus = document.getElementById('toasterStatus');
+      const toasterIcon = document.getElementById('toasterIcon');
+      
+      toasterTitle.textContent = title;
+      toasterStatus.textContent = status;
+      toasterIcon.className = 'toaster-icon ' + iconType;
+      toaster.classList.add('show');
+    }
+
+    function hideToaster() {
+      const toaster = document.getElementById('callToaster');
+      toaster.classList.remove('show');
+    }
+
+    function showCallView() {
+      document.getElementById('chatView').style.display = 'none';
+      document.getElementById('callView').style.display = 'flex';
+      isCallActive = true;
+    }
+
+    function showChatView() {
+      document.getElementById('chatView').style.display = 'flex';
+      document.getElementById('callView').style.display = 'none';
+      isCallActive = false;
+      updateCallingText('Calling...');
+      hideToaster();
+    }
+
+    function updateCallingText(text) {
+      document.getElementById('callingText').textContent = text;
+    }
+
+    function toggleMute() {
+      if (!localStream) return;
+      isMuted = !isMuted;
+      localStream.getAudioTracks().forEach(track => {
+        track.enabled = !isMuted;
+      });
+      const micBtn = document.getElementById('micButton');
+      if (isMuted) {
+        micBtn.classList.add('muted');
+        micBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27 6.18 7.45C6.06 7.95 6 8.46 6 9v3c0 1.66 1.34 3 3 3h.18l1.7 1.73c.24-.03.47-.06.72-.06h.18L19.73 21 21 19.73l-9-9L4.27 3zM12 21c-1.66 0-3-1.34-3-3v-3c0-.46.06-.95.18-1.43L12 17.18V21z"/></svg>';
+      } else {
+        micBtn.classList.remove('muted');
+        micBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>';
+      }
+    }
+
+    async function endCall() {
+      if (callId) {
+        ws.send(JSON.stringify({ type: "call.end", call_id: callId }));
+      }
+      await cleanupPeer();
+      showChatView();
+    }
+
+    ws.onopen = () => {
+      console.log("USER WS OPEN");
+      document.getElementById('statusText').textContent = 'Connected';
+    };
+
+    ws.onclose = (e) => {
+      console.log("USER WS CLOSE", e.code, e.reason);
+      document.getElementById('statusText').textContent = 'Disconnected';
+    };
+
+    ws.onerror = (e) => {
+      console.log("USER WS ERROR", e);
+      document.getElementById('statusText').textContent = 'Error';
+    };
+
+    ws.onmessage = async (e) => {
+      const msg = JSON.parse(e.data);
+      console.log("WS:", msg);
+
+      if (msg.type === "call.ringing") {
+        callId = msg.call_id;
+        console.log("Call ringing, callId:", callId);
+        showToaster('Calling...', 'Connecting to master', 'calling');
+      }
+
+      if (msg.type === "call.accepted") {
+        console.log("Call accepted -> createPeer -> send offer");
+        updateCallingText('Connected');
+        showToaster('Connected', 'Call in progress', 'connected');
+        await createPeer();
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        ws.send(JSON.stringify({
+          type: "call.offer",
+          call_id: callId,
+          sdp: offer
+        }));
+      }
+
+      if (msg.type === "call.answer") {
+        console.log("Received answer -> setRemoteDescription");
+        await pc.setRemoteDescription(msg.sdp);
+      }
+
+      if (msg.type === "call.ice") {
+        try {
+          await pc.addIceCandidate(msg.candidate);
+        } catch (err) {
+          console.warn("addIceCandidate failed:", err);
+        }
+      }
+
+      if (msg.type === "call.ended") {
+        console.log("Call ended");
+        await cleanupPeer();
+        showChatView();
+      }
+
+      if (msg.type === "call.error") {
+        console.log("CALL ERROR:", msg);
+        cleanupPeer();
+        showChatView();
+      }
+    };
+
+    function startCall() {
+      ws.send(JSON.stringify({ type: "call.start" }));
+      console.log("Sent call.start");
+      showToaster('Calling...', 'Connecting to master', 'calling');
+    }
+
+    async function createPeer() {
+      if (pc) return;
+
+      pc = new RTCPeerConnection(ice);
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) {
+          ws.send(JSON.stringify({
+            type: "call.ice",
+            call_id: callId,
+            candidate: e.candidate
+          }));
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        console.log("pc.connectionState =", pc.connectionState);
+        if (pc.connectionState === 'connected') {
+          updateCallingText('Connected');
+          showToaster('Connected', 'Call in progress', 'connected');
+        }
+      };
+
+      pc.oniceconnectionstatechange = () => console.log("pc.iceConnectionState =", pc.iceConnectionState);
+
+      pc.ontrack = (e) => {
+        remoteStream = e.streams[0];
+        console.log("Remote track received. Tracks:", remoteStream.getTracks().map(t => t.kind));
+        document.getElementById("remoteAudio").srcObject = remoteStream;
+        startRemoteMeter(remoteStream);
+      };
+
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      console.log("Local mic captured. Tracks:", localStream.getTracks().map(t => t.kind));
+      localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+
+      startLocalMeter(localStream);
+      startAudioStatsLogger();
+    }
+
+    async function cleanupPeer() {
+      stopMeters();
+      stopAudioStatsLogger();
+
+      try { if (pc) pc.close(); } catch {}
+      pc = null;
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+      }
+      localStream = null;
+      remoteStream = null;
+      callId = null;
+      isMuted = false;
+      const micBtn = document.getElementById('micButton');
+      micBtn.classList.remove('muted');
+      micBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>';
+    }
+
+    let meterCtx = null;
+    let localMeterTimer = null;
+    let remoteMeterTimer = null;
+
+    function stopMeters() {
+      if (localMeterTimer) clearInterval(localMeterTimer);
+      if (remoteMeterTimer) clearInterval(remoteMeterTimer);
+      localMeterTimer = null;
+      remoteMeterTimer = null;
+      if (meterCtx) {
+        try { meterCtx.close(); } catch {}
+      }
+      meterCtx = null;
+    }
+
+    function ensureMeterCtx() {
+      if (!meterCtx) meterCtx = new (window.AudioContext || window.webkitAudioContext)();
+      return meterCtx;
+    }
+
+    function makeRmsNode(stream) {
+      const ctx = ensureMeterCtx();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+      return analyser;
+    }
+
+    function computeRms(analyser) {
+      const buf = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      return Math.sqrt(sum / buf.length);
+    }
+
+    function startLocalMeter(stream) {
+      const analyser = makeRmsNode(stream);
+      if (localMeterTimer) return;
+
+      localMeterTimer = setInterval(() => {
+        const rms = computeRms(analyser);
+        console.log("🎤 LOCAL RMS:", rms.toFixed(4));
+      }, 500);
+    }
+
+    function startRemoteMeter(stream) {
+      const analyser = makeRmsNode(stream);
+      if (remoteMeterTimer) return;
+
+      remoteMeterTimer = setInterval(() => {
+        const rms = computeRms(analyser);
+        console.log("🔊 REMOTE RMS:", rms.toFixed(4));
+      }, 500);
+    }
+
+    let statsTimer = null;
+
+    function startAudioStatsLogger() {
+      if (statsTimer) return;
+
+      statsTimer = setInterval(async () => {
+        if (!pc) return;
+
+        const stats = await pc.getStats();
+        let outAudio = null;
+        let inAudio = null;
+
+        stats.forEach(r => {
+          if (r.type === "outbound-rtp" && r.kind === "audio") outAudio = r;
+          if (r.type === "inbound-rtp" && r.kind === "audio") inAudio = r;
+        });
+
+        console.log("AUDIO OUT:",
+          outAudio ? { bytesSent: outAudio.bytesSent, packetsSent: outAudio.packetsSent } : "none"
+        );
+
+        console.log("AUDIO IN:",
+          inAudio ? { bytesReceived: inAudio.bytesReceived, packetsReceived: inAudio.packetsReceived, jitter: inAudio.jitter } : "none"
+        );
+      }, 2000);
+    }
+
+    function stopAudioStatsLogger() {
+      if (statsTimer) {
+        clearInterval(statsTimer);
+        statsTimer = null;
+      }
+    }
+
+    let recCtx = null;
+    let recProcessor = null;
+    let recDestination = null;
+    let recording = false;
+    let recSampleRate = 48000;
+    let pcmChunks = [];
+
+    function buildMixedStreamForWav(localStream, remoteStream) {
+      recCtx = new (window.AudioContext || window.webkitAudioContext)();
+      recSampleRate = recCtx.sampleRate;
+
+      const localSource = recCtx.createMediaStreamSource(localStream);
+      const remoteSource = recCtx.createMediaStreamSource(remoteStream);
+
+      const localGain = recCtx.createGain();
+      const remoteGain = recCtx.createGain();
+      localGain.gain.value = 1.0;
+      remoteGain.gain.value = 1.0;
+
+      recDestination = recCtx.createMediaStreamDestination();
+
+      localSource.connect(localGain).connect(recDestination);
+      remoteSource.connect(remoteGain).connect(recDestination);
+
+      return recDestination.stream;
+    }
+
+    function startRecordingWav(localStream, remoteStream) {
+      if (!localStream || !remoteStream) {
+        alert("Cannot record yet: waiting for streams. Start call and wait until remote audio is connected.");
+        return;
+      }
+      if (recording) return;
+
+      pcmChunks = [];
+      recording = true;
+
+      const mixedStream = buildMixedStreamForWav(localStream, remoteStream);
+      const mixedSource = recCtx.createMediaStreamSource(mixedStream);
+
+      const bufferSize = 4096;
+      recProcessor = recCtx.createScriptProcessor(bufferSize, 1, 1);
+
+      recProcessor.onaudioprocess = (e) => {
+        if (!recording) return;
+        const input = e.inputBuffer.getChannelData(0);
+        pcmChunks.push(new Float32Array(input));
+      };
+
+      mixedSource.connect(recProcessor);
+      recProcessor.connect(recCtx.destination);
+
+      console.log("WAV recording started. sampleRate =", recSampleRate);
+    }
+
+    async function stopRecording() {
+      if (!recording) return;
+
+      recording = false;
+
+      try { if (recProcessor) recProcessor.disconnect(); } catch {}
+      try { if (recDestination) recDestination.disconnect && recDestination.disconnect(); } catch {}
+      recProcessor = null;
+      recDestination = null;
+
+      try { if (recCtx) await recCtx.close(); } catch {}
+      recCtx = null;
+
+      const wavBlob = floatToWavBlob(pcmChunks, recSampleRate);
+      pcmChunks = [];
+
+      console.log("WAV recording stopped. bytes =", wavBlob.size);
+
+      await uploadWav(wavBlob);
+    }
+
+    function startRec() {
+      startRecordingWav(localStream, remoteStream);
+    }
+
+    function floatToWavBlob(chunks, sampleRate) {
+      let length = 0;
+      for (const c of chunks) length += c.length;
+
+      const pcm = new Float32Array(length);
+      let offset = 0;
+      for (const c of chunks) {
+        pcm.set(c, offset);
+        offset += c.length;
+      }
+
+      const buffer = new ArrayBuffer(44 + pcm.length * 2);
+      const view = new DataView(buffer);
+
+      function writeString(off, str) {
+        for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i));
+      }
+
+      const numChannels = 1;
+      const bitsPerSample = 16;
+      const byteRate = sampleRate * numChannels * bitsPerSample / 8;
+      const blockAlign = numChannels * bitsPerSample / 8;
+      const dataSize = pcm.length * 2;
+
+      writeString(0, "RIFF");
+      view.setUint32(4, 36 + dataSize, true);
+      writeString(8, "WAVE");
+      writeString(12, "fmt ");
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, numChannels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, byteRate, true);
+      view.setUint16(32, blockAlign, true);
+      view.setUint16(34, bitsPerSample, true);
+      writeString(36, "data");
+      view.setUint32(40, dataSize, true);
+
+      let idx = 44;
+      for (let i = 0; i < pcm.length; i++) {
+        let s = Math.max(-1, Math.min(1, pcm[i]));
+        const int16 = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        view.setInt16(idx, int16, true);
+        idx += 2;
+      }
+
+      return new Blob([buffer], { type: "audio/wav" });
+    }
+
+    async function uploadWav(blob) {
+      try {
+        const fd = new FormData();
+        fd.append("file", blob, `call-${Date.now()}.wav`);
+        fd.append("call_id", callId || "");
+        fd.append("role", ROLE || "unknown");
+
+        const res = await fetch("http://127.0.0.1:8013/call/upload", {
+          method: "POST",
+          body: fd
+        });
+
+        if (res.status === 413) {
+          console.warn("File too large to upload. Size:", (blob.size / 1024 / 1024).toFixed(2), "MB");
+          return;
+        }
+
+        const data = await res.json();
+        console.log("Upload result:", data);
+
+        if (!data.ok) {
+          console.error("Upload failed: " + (data.error || "unknown"));
+        } else {
+          console.log("Saved WAV on server: " + (data.wav || data.file || "ok"));
+        }
+      } catch (error) {
+        console.error("Upload error:", error);
+      }
+    }
+  </script>
+</body>
+</html>

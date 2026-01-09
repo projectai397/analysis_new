@@ -12,9 +12,17 @@ import type {
   ServerTextMessage,
   ServerFileMessage,
   ServerAudioMessage,
+  ServerCallIncoming,
+  ServerCallRinging,
+  ServerCallAccepted,
+  ServerCallOffer,
+  ServerCallAnswer,
+  ServerCallIce,
+  ServerCallEnded,
+  ServerCallError,
 } from "./types"
 
-const DEFAULT_WS = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:4000/ws"
+const DEFAULT_WS = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:8013/ws"
 
 type UseChatSocketOptions = {
   token: string
@@ -27,6 +35,7 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
   const [needsSelection, setNeedsSelection] = useState(false)
   const [chatrooms, setChatrooms] = useState<ServerJoinedAdminList["chatrooms"]>([])
   const [messages, setMessages] = useState<ConversationItem[]>([])
+  const [callEvent, setCallEvent] = useState<ServerCallIncoming | ServerCallRinging | ServerCallAccepted | ServerCallOffer | ServerCallAnswer | ServerCallIce | ServerCallEnded | ServerCallError | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const retryRef = useRef(0)
   const keepAliveRef = useRef<NodeJS.Timeout | null>(null)
@@ -40,17 +49,25 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
   const send = useCallback((payload: ClientEvent) => {
     const s = wsRef.current
     if (s && s.readyState === s.OPEN) {
+      console.log("[WS] Sending:", payload.type, payload)
       s.send(JSON.stringify(payload))
+    } else {
+      console.warn("[WS] Cannot send - WebSocket not open", { readyState: s?.readyState })
     }
   }, [])
 
   const connect = useCallback(() => {
-    if (!token || !wsUrl) return
+    if (!token || !wsUrl) {
+      console.warn("[WS] Cannot connect: missing token or URL", { token: !!token, wsUrl })
+      return
+    }
+    console.log("[WS] Connecting to:", wsUrl.replace(/token=[^&]+/, "token=***"))
     setStatus("connecting")
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
 
     ws.onopen = () => {
+      console.log("[WS] Connected successfully")
       setStatus("open")
       retryRef.current = 0
       keepAliveRef.current = setInterval(() => {
@@ -64,12 +81,15 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
         // console.log("test data",data);
 
         if (data.type === "joined") {
+          console.log("[WS] Received joined event:", data)
           if ((data as any).role === "user") {
             const j = data as ServerJoinedUser
+            console.log("[WS] User joined, chat_id:", j.chat_id)
             setChatId(j.chat_id)
             setNeedsSelection(false)
           } else {
             const j = data as ServerJoinedAdminList
+            console.log("[WS] Admin/Master joined, needs_selection:", j.needs_selection, "chatrooms:", j.chatrooms.length)
             if (j.needs_selection) {
               setNeedsSelection(true)
               setChatrooms(
@@ -135,6 +155,30 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
             }
             return prev
           })
+        } else if (data.type === "call.incoming") {
+          console.log("[WS] Received call.incoming event:", data)
+          setCallEvent(data as ServerCallIncoming)
+        } else if (data.type === "call.ringing") {
+          console.log("[WS] Received call.ringing event:", data)
+          setCallEvent(data as ServerCallRinging)
+        } else if (data.type === "call.accepted") {
+          console.log("[WS] Received call.accepted event:", data)
+          setCallEvent(data as ServerCallAccepted)
+        } else if (data.type === "call.offer") {
+          console.log("[WS] Received call.offer event:", data)
+          setCallEvent(data as ServerCallOffer)
+        } else if (data.type === "call.answer") {
+          console.log("[WS] Received call.answer event:", data)
+          setCallEvent(data as ServerCallAnswer)
+        } else if (data.type === "call.ice") {
+          console.log("[WS] Received call.ice event:", data)
+          setCallEvent(data as ServerCallIce)
+        } else if (data.type === "call.ended") {
+          console.log("[WS] Received call.ended event:", data)
+          setCallEvent(data as ServerCallEnded)
+        } else if (data.type === "call.error") {
+          console.error("[WS] Received call.error event:", data)
+          setCallEvent(data as ServerCallError)
         }
       } catch (err) {
         console.log("[v0] WS parse error:", (err as Error).message)
@@ -150,17 +194,22 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
     //   setTimeout(connect, delay)
     // }
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      console.log("[WS] Connection closed", { code: event.code, reason: event.reason, wasClean: event.wasClean })
       setStatus("closed")
       if (keepAliveRef.current) clearInterval(keepAliveRef.current)
 
       if (retryRef.current < 5) {
         const delay = Math.min(1000 * 2 ** retryRef.current, 15000)
         retryRef.current += 1
+        console.log(`[WS] Retrying connection in ${delay}ms (attempt ${retryRef.current}/5)`)
         setTimeout(connect, delay)
+      } else {
+        console.error("[WS] Max retry attempts reached. Please check server connection.")
       }
     }
-    ws.onerror = () => {
+    ws.onerror = (error) => {
+      console.error("[WS] Connection error:", error)
       try {
         ws.close()
       } catch { }
@@ -191,6 +240,7 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
   )
 
   const resetLiveMessages = useCallback(() => setMessages([]), [])
+  const clearCallEvent = useCallback(() => setCallEvent(null), [])
 
   return {
     status,
@@ -201,5 +251,8 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
     sendText,
     selectRoom,
     resetLiveMessages,
+    send,
+    callEvent,
+    clearCallEvent,
   }
 }

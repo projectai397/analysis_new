@@ -1499,6 +1499,84 @@ def create_app() -> Flask:
                     last_activity["ts"] = time.time()
                     continue
 
+                # ──────────────────────────────────────────────────────────────
+                # ✅ SIMPLE CALL SIGNALING (for direct WebRTC via chatroom)
+                # Handles: call_offer, call_answer, call_ice_candidate, call_end, call_accept, call_reject
+                # These are broadcasted to all sockets in the same chatroom
+                # ──────────────────────────────────────────────────────────────
+                if t == "call_offer":
+                    if not chat or not chat_id:
+                        ws.send(json.dumps({"type": "error", "error": "no_chat_selected"}))
+                        last_activity["ts"] = time.time()
+                        continue
+                    room_broadcast(chat_id, {
+                        "type": "call_offer",
+                        "from": conn_role,
+                        "chat_id": chat_id,
+                        "offer": data.get("offer"),
+                    })
+                    room_broadcast(chat_id, {
+                        "type": "call_ringing",
+                        "from": conn_role,
+                        "chat_id": chat_id,
+                    })
+                    last_activity["ts"] = time.time()
+                    continue
+
+                if t == "call_answer":
+                    if not chat or not chat_id:
+                        ws.send(json.dumps({"type": "error", "error": "no_chat_selected"}))
+                        last_activity["ts"] = time.time()
+                        continue
+                    room_broadcast(chat_id, {
+                        "type": "call_answer",
+                        "from": conn_role,
+                        "chat_id": chat_id,
+                        "answer": data.get("answer"),
+                    })
+                    last_activity["ts"] = time.time()
+                    continue
+
+                if t == "call_ice_candidate":
+                    if not chat or not chat_id:
+                        ws.send(json.dumps({"type": "error", "error": "no_chat_selected"}))
+                        last_activity["ts"] = time.time()
+                        continue
+                    room_broadcast(chat_id, {
+                        "type": "call_ice_candidate",
+                        "from": conn_role,
+                        "chat_id": chat_id,
+                        "candidate": data.get("candidate"),
+                    })
+                    last_activity["ts"] = time.time()
+                    continue
+
+                if t == "call_end":
+                    if not chat or not chat_id:
+                        ws.send(json.dumps({"type": "error", "error": "no_chat_selected"}))
+                        last_activity["ts"] = time.time()
+                        continue
+                    room_broadcast(chat_id, {
+                        "type": "call_end",
+                        "from": conn_role,
+                        "chat_id": chat_id,
+                    })
+                    last_activity["ts"] = time.time()
+                    continue
+
+                if t == "call_accept":
+                    if not chat or not chat_id:
+                        ws.send(json.dumps({"type": "error", "error": "no_chat_selected"}))
+                        last_activity["ts"] = time.time()
+                        continue
+                    room_broadcast(chat_id, {
+                        "type": "call_accepted",
+                        "from": conn_role,
+                        "chat_id": chat_id,
+                    })
+                    last_activity["ts"] = time.time()
+                    continue
+
                 if t == "message":
                     if not chat or not chat_id:
                         ws.send(json.dumps({"type": "error", "error": "no_chat_selected"}))
