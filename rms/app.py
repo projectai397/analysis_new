@@ -860,6 +860,8 @@ def create_app() -> Flask:
         def _sock_send_role(role: str, target_id: str, payload: dict) -> bool:
             try:
                 rr = (role or "").lower()
+                if rr == "user":
+                    return bool(_sock_send_any(USER_SOCKETS, target_id, payload))
                 if rr == "admin":
                     return bool(_sock_send_any(ADMIN_SOCKETS, target_id, payload))
                 if rr == "superadmin":
@@ -1293,21 +1295,30 @@ def create_app() -> Flask:
                 # ──────────────────────────────────────────────────────────────
                 # ✅ UPDATED: CALL SIGNALING LOGIC (ADD-ONLY / UPDATED BLOCK)
                 # Flow:
-                # - user   -> chat.super_admin_id
-                # - master -> chat.admin_id
-                # - admin  -> chat.owner_id
+                # - user   -> chat.super_admin_id (master)
+                # - master -> chat.admin_id (admin)
+                # - admin  -> chat.owner_id (superadmin)
+                # 
+                # IMPORTANT: Call signaling is sent to ANY connected socket for the target,
+                # regardless of which chatroom they're currently viewing. This allows masters
+                # to receive calls even when not in that specific chatroom.
+                # 
+                # NOTE: Only call.start requires a selected chatroom. Other call operations
+                # (accept, reject, end, offer, answer, ice) can work without a selected chatroom
+                # because they use call_id to look up the call info from ACTIVE_CALLS.
                 # ──────────────────────────────────────────────────────────────
                 if t.startswith("call."):
                     print("CALL BRANCH HIT:", t, "chat_id:", chat_id, "conn_role:", conn_role)
-                    if not chat or not chat_id:
-                        ws.send(json.dumps({"type": "call.error", "error": "no_chat_selected"}))
-                        last_activity["ts"] = time.time()
-                        continue
-
-                    # keep legacy name (do not remove)
-                    master_id = str(getattr(chat, "super_admin_id", "") or "")
 
                     if t == "call.start":
+                        # ✅ call.start requires a selected chatroom
+                        if not chat or not chat_id:
+                            ws.send(json.dumps({"type": "call.error", "error": "no_chat_selected"}))
+                            last_activity["ts"] = time.time()
+                            continue
+
+                        # keep legacy name (do not remove)
+                        master_id = str(getattr(chat, "super_admin_id", "") or "")
                         # ✅ allow user/master/admin to initiate call
                         if conn_role not in ("user", "master", "admin"):
                             ws.send(json.dumps({"type": "call.error", "error": "forbidden_role_for_call"}))
@@ -1334,6 +1345,9 @@ def create_app() -> Flask:
                             "caller_id": str(pro_id),
                         }
 
+                        # ✅ Send call.incoming to target - works even if target is not in this chatroom
+                        # _sock_send_role uses _sock_send_any which sends to ANY connected socket
+                        # for that user_id, regardless of which chatroom they're viewing
                         ok = _sock_send_role(
                             target_role,
                             target_id,
