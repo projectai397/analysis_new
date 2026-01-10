@@ -30,6 +30,7 @@ from src.helpers.hierarchy_service import (
     get_users_for_master,
     get_user_full_by_id,
 )
+from src.config import open_positions, symbols
 from .main import (
     get_logged_in,
     require_login,
@@ -67,6 +68,97 @@ def format_user_list(title: str, users: List[Dict[str, Any]]) -> str:
         lines.append(f"… and {len(users) - MAX_SHOW} more")
 
     return "\n".join(lines)
+
+
+def calculate_pnl_for_users(user_ids: List[ObjectId]) -> float:
+    """
+    Calculate total PnL for a list of user IDs from their open positions.
+    Uses the same logic as reports.py.
+    """
+    try:
+        if not user_ids:
+            return 0.0
+        
+        all_positions = list(open_positions.find({"userId": {"$in": user_ids}}))
+        if not all_positions:
+            return 0.0
+        
+        symbol_ids = set()
+        for pos in all_positions:
+            symbol_id = pos.get("symbolId")
+            if symbol_id:
+                symbol_ids.add(symbol_id)
+        
+        symbol_data = {}
+        for symbol_id in symbol_ids:
+            try:
+                symbol_oid = ObjectId(symbol_id) if not isinstance(symbol_id, ObjectId) else symbol_id
+                symbol_doc = symbols.find_one({"_id": symbol_oid})
+                if symbol_doc:
+                    symbol_data[symbol_id] = {
+                        "ask": float(symbol_doc.get("ask") or 0),
+                        "bid": float(symbol_doc.get("bid") or 0),
+                        "ltp": float(symbol_doc.get("ltp") or symbol_doc.get("lastPrice") or 0),
+                    }
+            except Exception as e:
+                logger.warning(f"Error fetching symbol {symbol_id}: {e}")
+                symbol_data[symbol_id] = {"ask": 0, "bid": 0, "ltp": 0}
+        
+        total_pnl = 0.0
+        for pos in all_positions:
+            try:
+                symbol_id = pos.get("symbolId")
+                if not symbol_id:
+                    continue
+                
+                symbol_info = symbol_data.get(symbol_id, {"ask": 0, "bid": 0, "ltp": 0})
+                buy_price = float(pos.get("buyPrice") or pos.get("price") or pos.get("open_price") or 0)
+                total_quantity = float(pos.get("totalQuantity") or pos.get("quantity") or 0)
+                trade_type = str(pos.get("tradeType") or pos.get("orderType") or "").lower()
+                
+                if trade_type == "buy":
+                    pnl = (symbol_info["bid"] - buy_price) * total_quantity
+                elif trade_type == "sell":
+                    pnl = (symbol_info["ask"] - buy_price) * total_quantity
+                else:
+                    pnl = 0.0
+                
+                total_pnl += pnl
+            except Exception as e:
+                logger.warning(f"Error calculating PnL for position: {e}")
+                continue
+        
+        return total_pnl
+    except Exception as e:
+        logger.error(f"Error calculating PnL for users: {e}", exc_info=True)
+        return 0.0
+
+
+def calculate_role_total_pnl(role_id: ObjectId, category: str) -> float:
+    """
+    Calculate total PnL based on role category.
+    - admin: gets all users under admin
+    - master: gets all users under master
+    - client: gets PnL for that single client
+    """
+    try:
+        user_ids = []
+        
+        if category == "admin":
+            users_under_role = get_users_for_admin(role_id)
+            user_ids = [ObjectId(u.get("id") or u.get("_id")) for u in users_under_role if u.get("id") or u.get("_id")]
+        elif category == "master":
+            users_under_role = get_users_for_master(role_id)
+            user_ids = [ObjectId(u.get("id") or u.get("_id")) for u in users_under_role if u.get("id") or u.get("_id")]
+        elif category == "client":
+            user_ids = [role_id]
+        else:
+            return 0.0
+        
+        return calculate_pnl_for_users(user_ids)
+    except Exception as e:
+        logger.error(f"Error calculating role total PnL for {category} {role_id}: {e}", exc_info=True)
+        return 0.0
 
 
 def build_user_summary_text(u: Dict[str, Any], category: str) -> str:
@@ -534,6 +626,15 @@ async def inline_user_search(update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"inline_user_search full_doc error: {e}")
         user_doc = full_doc or u
 
+        if category in ["admin", "master", "client"] and user_doc:
+            try:
+                role_id = ObjectId(uid)
+                calculated_pnl = calculate_role_total_pnl(role_id, category)
+                user_doc = user_doc.copy() if isinstance(user_doc, dict) else dict(user_doc)
+                user_doc["profitLoss"] = calculated_pnl
+            except Exception as e:
+                logger.warning(f"Error calculating PnL for {category} in inline search: {e}")
+
         summary_text = build_user_summary_text(user_doc, category)
 
         results.append(
@@ -575,6 +676,12 @@ async def user_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         msg = await query.message.reply_text("❌ User not found in database.")
         remember_bot_message_from_message(update, msg)
         return
+
+    if category in ["admin", "master", "client"]:
+        role_id = ObjectId(uid)
+        calculated_pnl = calculate_role_total_pnl(role_id, category)
+        full_doc = full_doc.copy()
+        full_doc["profitLoss"] = calculated_pnl
 
     header = build_user_summary_text(full_doc, category)
     msg = await query.message.reply_text(header, parse_mode="HTML")

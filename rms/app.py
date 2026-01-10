@@ -893,8 +893,139 @@ def create_app() -> Flask:
             else:
                 conn_role = "staff"
 
-            # 🧱 keep old 2-bucket logic for “user vs staff” behaviour
+            # 🧱 keep old 2-bucket logic for "user vs staff" behaviour
             bucket_role = "user" if is_user else "superadmin"
+
+            def _as_oid(v):
+                try:
+                    return v if isinstance(v, ObjectId) else ObjectId(str(v))
+                except Exception:
+                    return None
+
+            def _iso(dt):
+                try:
+                    return dt.isoformat()
+                except Exception:
+                    return None
+
+            def _get_chatrooms_paginated(page=1, search_query=None, limit=50):
+                base_fields = (
+                    "id",
+                    "user_id",
+                    "is_user_active",
+                    "is_superadmin_active",
+                    "is_owner_active",
+                    "is_admin_active",
+                    "updated_time",
+                    "created_time",
+                    "room_type",
+                    "owner_id",
+                    "admin_id",
+                    "super_admin_id",
+                )
+
+                from mongoengine.queryset.visitor import Q
+
+                if is_superadmin:
+                    try:
+                        rooms_query = Chatroom.objects(
+                            Q(owner_id=pro_id)
+                            | Q(super_admin_id=pro_id)
+                            | Q(user_id=pro_id, room_type="staff_bot")
+                        )
+                    except Exception:
+                        try:
+                            rooms_query = Chatroom.objects(owner_id=pro_id)
+                            if rooms_query.count() == 0:
+                                rooms_query = Chatroom.objects(super_admin_id=pro_id)
+                        except Exception:
+                            rooms_query = Chatroom.objects(id=None)
+                elif is_admin:
+                    rooms_query = Chatroom.objects(admin_id=pro_id)
+                elif is_master:
+                    rooms_query = Chatroom.objects(super_admin_id=pro_id)
+                else:
+                    rooms_query = Chatroom.objects(id=None)
+
+                if search_query and search_query.strip():
+                    search_term = search_query.strip()
+                    matching_user_ids = set()
+
+                    search_cursor = support_users_coll.find(
+                        {
+                            "$or": [
+                                {"name": {"$regex": search_term, "$options": "i"}},
+                                {"userName": {"$regex": search_term, "$options": "i"}},
+                                {"user_name": {"$regex": search_term, "$options": "i"}},
+                                {"phone": {"$regex": search_term, "$options": "i"}},
+                            ]
+                        },
+                        {"_id": 0, "user_id": 1},
+                    )
+                    for doc in search_cursor:
+                        user_id = doc.get("user_id")
+                        if user_id:
+                            oid = _as_oid(user_id)
+                            if oid:
+                                matching_user_ids.add(oid)
+
+                    if matching_user_ids:
+                        rooms_query = rooms_query.filter(user_id__in=list(matching_user_ids))
+                    else:
+                        rooms_query = Chatroom.objects(id=None)
+
+                rooms_query = rooms_query.only(*base_fields).order_by("-updated_time")
+
+                total_count = rooms_query.count()
+                total_pages = (total_count + limit - 1) // limit if limit > 0 else 1
+                page = max(1, min(page, total_pages)) if total_pages > 0 else 1
+
+                skip = (page - 1) * limit
+                rooms_list = list(rooms_query.skip(skip).limit(limit))
+
+                user_oid_set = {
+                    _as_oid(getattr(r, "user_id", None))
+                    for r in rooms_list
+                    if getattr(r, "user_id", None)
+                }
+                user_oid_list = [oid for oid in user_oid_set if oid is not None]
+
+                meta_by_userid = {}
+                if user_oid_list:
+                    cursor = support_users_coll.find(
+                        {"user_id": {"$in": user_oid_list}},
+                        {"_id": 0, "user_id": 1, "name": 1, "userName": 1, "user_name": 1, "phone": 1},
+                    )
+                    for doc in cursor:
+                        key = str(doc.get("user_id"))
+                        meta_by_userid[key] = {
+                            "name": doc.get("name") or "",
+                            "userName": (doc.get("userName") or doc.get("user_name") or ""),
+                            "phone": doc.get("phone") or "",
+                        }
+
+                chatrooms = [
+                    {
+                        "chat_id": str(r.id),
+                        "user_id": str(r.user_id) if r.user_id else None,
+                        "is_user_active": bool(getattr(r, "is_user_active", False)),
+                        "is_superadmin_active": bool(getattr(r, "is_superadmin_active", False)),
+                        "is_owner_active": bool(getattr(r, "is_owner_active", False)),
+                        "is_admin_active": bool(getattr(r, "is_admin_active", False)),
+                        "updated_time": _iso(getattr(r, "updated_time", None) or getattr(r, "created_time", None)),
+                        "user": meta_by_userid.get(str(getattr(r, "user_id", "")), {"name": "", "userName": "", "phone": ""}),
+                        "room_type": (getattr(r, "room_type", None) or "support"),
+                    }
+                    for r in rooms_list
+                ]
+
+                return {
+                    "chatrooms": chatrooms,
+                    "total_count": total_count,
+                    "total_pages": total_pages,
+                    "current_page": page,
+                    "limit": limit,
+                }
 
             # ──────────────────────────────────────────────────────────────
             # ✅ NEW: Global socket registration for user<->master call popup
@@ -1097,112 +1228,19 @@ def create_app() -> Flask:
 
                 # --- list rooms for selection (no params) ---
                 else:
-                    def _as_oid(v):
-                        try:
-                            return v if isinstance(v, ObjectId) else ObjectId(str(v))
-                        except Exception:
-                            return None
-
-                    base_fields = (
-                        "id",
-                        "user_id",
-                        "is_user_active",
-                        "is_superadmin_active",
-                        "is_owner_active",
-                        "is_admin_active",
-                        "updated_time",
-                        "created_time",
-                        "room_type",
-                        "owner_id",
-                        "admin_id",
-                        "super_admin_id",
-                    )
-
-                    if is_superadmin:
-                        try:
-                            from mongoengine.queryset.visitor import Q
-                            rooms = (
-                                Chatroom.objects(
-                                    Q(owner_id=pro_id)
-                                    | Q(super_admin_id=pro_id)
-                                    | Q(user_id=pro_id, room_type="staff_bot")
-                                )
-                                .only(*base_fields)
-                                .order_by("-updated_time")
-                            )
-                        except Exception:
-                            rooms = (
-                                Chatroom.objects(owner_id=pro_id)
-                                .only(*base_fields)
-                                .order_by("-updated_time")
-                            )
-                            if rooms.count() == 0:
-                                rooms = (
-                                    Chatroom.objects(super_admin_id=pro_id)
-                                    .only(*base_fields)
-                                    .order_by("-updated_time")
-                                )
-                    elif is_admin:
-                        rooms = (
-                            Chatroom.objects(admin_id=pro_id)
-                            .only(*base_fields)
-                            .order_by("-updated_time")
-                        )
-                    elif is_master:
-                        rooms = (
-                            Chatroom.objects(super_admin_id=pro_id)
-                            .only(*base_fields)
-                            .order_by("-updated_time")
-                        )
-                    else:
-                        rooms = Chatroom.objects(id=None)
-
-                    rooms_list = list(rooms)
-                    user_oid_set = {
-                        _as_oid(getattr(r, "user_id", None))
-                        for r in rooms_list
-                        if getattr(r, "user_id", None)
-                    }
-                    user_oid_list = [oid for oid in user_oid_set if oid is not None]
-
-                    meta_by_userid = {}
-                    if user_oid_list:
-                        cursor = support_users_coll.find(
-                            {"user_id": {"$in": user_oid_list}},
-                            {"_id": 0, "user_id": 1, "name": 1, "userName": 1, "user_name": 1, "phone": 1},
-                        )
-                        for doc in cursor:
-                            key = str(doc.get("user_id"))
-                            meta_by_userid[key] = {
-                                "name": doc.get("name") or "",
-                                "userName": (doc.get("userName") or doc.get("user_name") or ""),
-                                "phone": doc.get("phone") or "",
-                            }
-
-                    def _iso(dt):
-                        try:
-                            return dt.isoformat()
-                        except Exception:
-                            return None
+                    result = _get_chatrooms_paginated(page=1, search_query=None, limit=50)
 
                     payload = {
                         "type": "joined",
                         "role": conn_role,
                         "needs_selection": True,
-                        "chatrooms": [
-                            {
-                                "chat_id": str(r.id),
-                                "user_id": str(r.user_id) if r.user_id else None,
-                                "is_user_active": bool(getattr(r, "is_user_active", False)),
-                                "is_superadmin_active": bool(getattr(r, "is_superadmin_active", False)),
-                                "is_owner_active": bool(getattr(r, "is_owner_active", False)),
-                                "is_admin_active": bool(getattr(r, "is_admin_active", False)),
-                                "updated_time": _iso(getattr(r, "updated_time", None) or getattr(r, "created_time", None)),
-                                "user": meta_by_userid.get(str(getattr(r, "user_id", "")), {"name": "", "userName": "", "phone": ""}),
-                                "room_type": (getattr(r, "room_type", None) or "support"),
-                            }
-                            for r in rooms_list
-                        ],
+                        "chatrooms": result["chatrooms"],
+                        "pagination": {
+                            "total_count": result["total_count"],
+                            "total_pages": result["total_pages"],
+                            "current_page": result["current_page"],
+                            "limit": result["limit"],
+                        },
                     }
                     ws.send(json.dumps(payload))
                     last_activity["ts"] = time.time()
@@ -1228,6 +1266,38 @@ def create_app() -> Flask:
                     ws.send(json.dumps({"type": "pong"}))
                     last_activity["ts"] = time.time()
                     continue
+
+                if t == "list_chatrooms" and bucket_role != "user":
+                    try:
+                        page = int(data.get("page", 1))
+                        search_query = data.get("search", "").strip() or None
+                        limit = int(data.get("limit", 50))
+
+                        if page < 1:
+                            page = 1
+                        if limit < 1 or limit > 100:
+                            limit = 50
+
+                        result = _get_chatrooms_paginated(page=page, search_query=search_query, limit=limit)
+
+                        payload = {
+                            "type": "chatrooms_list",
+                            "chatrooms": result["chatrooms"],
+                            "pagination": {
+                                "total_count": result["total_count"],
+                                "total_pages": result["total_pages"],
+                                "current_page": result["current_page"],
+                                "limit": result["limit"],
+                                "search": search_query if search_query else None,
+                            },
+                        }
+                        ws.send(json.dumps(payload))
+                        last_activity["ts"] = time.time()
+                        continue
+                    except Exception as e:
+                        ws.send(json.dumps({"type": "error", "error": f"list_chatrooms_failed: {str(e)}"}))
+                        last_activity["ts"] = time.time()
+                        continue
 
                 if t == "select_chatroom" and bucket_role != "user":
                     target_id = data.get("chat_id")
