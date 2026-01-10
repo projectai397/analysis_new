@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>User WebRTC Test</title>
+</head>
+<body>
+  <h2>User</h2>
+
+  <button onclick="startCall()">Start Call</button>
+  <button onclick="startRec()">Start Recording (WAV)</button>
+  <button onclick="stopRecording()">Stop Recording</button>
+
+  <audio id="remoteAudio" autoplay playsinline controls></audio>
+
+  <script>
+    // 🔐 USER TOKEN
+    const TOKEN =
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2OTQzYTkxMDEwMzk1YmM5NmFkOTUyN2UiLCJuYW1lIjoiUFJPRklUTElWRSIsInBob25lIjoiMjIyMjIyMjIyMiIsInVzZXJOYW1lIjoiUFJPRklUTElWRSIsInJvbGUiOiJhZG1pbiIsInJvbGVfaWQiOiI2NGI2Mzc1NWM3MTQ2MWM1MDJlYTQ3MTQiLCJwcmVmZXJlbmNlIjpudWxsLCJkZXZpY2VUb2tlbiI6bnVsbCwiZGV2aWNlSWQiOiIxZmMzN2U3Ni1jODMwLTQ1NzgtODM1NC01NTJhYzlmZmQ2ZjUiLCJkZXZpY2VUeXBlIjoid2ViIiwic2VxdWVuY2UiOjIwMDAyLCJpYXQiOjE3Njc3NjM0MjgsImV4cCI6MTc2ODM2ODIyOH0.-vz2PI7-QCoEJfE5Nop4uvtAqZHsWCqx-VdaxKQVKfg";
+
+    // Optional metadata (set your real chat_id if you want it saved with recording)
+    const ROLE = "admin";
+    const CHAT_ID = "695ce37270f72d192bab6f5d"; // ✅ put your chatroom id here (same as master)
+
+    const WS_URL = `ws://127.0.0.1:8013/ws?token=${TOKEN}`;
+
+    let ws = new WebSocket(WS_URL);
+    let pc = null;
+    let callId = null;
+
+    // Streams used for recording + meters
+    let localStream = null;
+    let remoteStream = null;
+
+    const ice = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+    ws.onopen = () => {
+      console.log("USER WS OPEN");
+
+      // ✅ ADDED: select chatroom like master.html
+      ws.send(JSON.stringify({
+        type: "select_chatroom",
+        chat_id: CHAT_ID
+      }));
+      console.log("USER -> select_chatroom sent:", CHAT_ID);
+    };
+
+    ws.onclose = (e) => console.log("USER WS CLOSE", e.code, e.reason);
+    ws.onerror = (e) => console.log("USER WS ERROR", e);
+
+    ws.onmessage = async (e) => {
+      const msg = JSON.parse(e.data);
+      console.log("WS:", msg);
+
+      if (msg.type === "call.ringing") {
+        callId = msg.call_id;
+        console.log("Call ringing, callId:", callId);
+      }
+
+      if (msg.type === "call.accepted") {
+        console.log("Call accepted -> createPeer -> send offer");
+        await createPeer();
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        ws.send(JSON.stringify({
+          type: "call.offer",
+          call_id: callId,
+          sdp: offer
+        }));
+      }
+
+      if (msg.type === "call.answer") {
+        console.log("Received answer -> setRemoteDescription");
+        await pc.setRemoteDescription(msg.sdp);
+      }
+
+      if (msg.type === "call.ice") {
+        try {
+          await pc.addIceCandidate(msg.candidate);
+        } catch (err) {
+          console.warn("addIceCandidate failed:", err);
+        }
+      }
+
+      if (msg.type === "call.ended") {
+        console.log("Call ended");
+        cleanupPeer();
+      }
+
+      if (msg.type === "call.error") {
+        console.log("CALL ERROR:", msg);
+      }
+    };
+
+    function startCall() {
+      ws.send(JSON.stringify({ type: "call.start" }));
+      console.log("Sent call.start");
+    }
+
+    async function createPeer() {
+      if (pc) return;
+
+      pc = new RTCPeerConnection(ice);
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) {
+          ws.send(JSON.stringify({
+            type: "call.ice",
+            call_id: callId,
+            candidate: e.candidate
+          }));
+        }
+      };
+
+      pc.onconnectionstatechange = () => console.log("pc.connectionState =", pc.connectionState);
+      pc.oniceconnectionstatechange = () => console.log("pc.iceConnectionState =", pc.iceConnectionState);
+
+      pc.ontrack = (e) => {
+        remoteStream = e.streams[0];
+        console.log("Remote track received. Tracks:", remoteStream.getTracks().map(t => t.kind));
+        document.getElementById("remoteAudio").srcObject = remoteStream;
+
+        // ✅ Start remote meter once remote stream arrives
+        startRemoteMeter(remoteStream);
+      };
+
+      // Capture mic (local)
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      console.log("Local mic captured. Tracks:", localStream.getTracks().map(t => t.kind));
+      localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+
+      // ✅ Start local meter immediately (proves mic has voice)
+      startLocalMeter(localStream);
+
+      // ✅ Start WebRTC stats logging (bytes in/out)
+      startAudioStatsLogger();
+    }
+
+    function cleanupPeer() {
+      stopRecording();
+      stopMeters();
+      stopAudioStatsLogger();
+
+      try { if (pc) pc.close(); } catch {}
+      pc = null;
+      localStream = null;
+      remoteStream = null;
+      callId = null;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // ✅ Meter (RMS) — CONFIRMS VOICE ENERGY (not just packets)
+    // ─────────────────────────────────────────────────────────────
+    let meterCtx = null;
+    let localMeterTimer = null;
+    let remoteMeterTimer = null;
+
+    function stopMeters() {
+      if (localMeterTimer) clearInterval(localMeterTimer);
+      if (remoteMeterTimer) clearInterval(remoteMeterTimer);
+      localMeterTimer = null;
+      remoteMeterTimer = null;
+      if (meterCtx) {
+        try { meterCtx.close(); } catch {}
+      }
+      meterCtx = null;
+    }
+
+    function ensureMeterCtx() {
+      if (!meterCtx) meterCtx = new (window.AudioContext || window.webkitAudioContext)();
+      return meterCtx;
+    }
+
+    function makeRmsNode(stream) {
+      const ctx = ensureMeterCtx();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+      return analyser;
+    }
+
+    function computeRms(analyser) {
+      const buf = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      return Math.sqrt(sum / buf.length); // 0..~1
+    }
+
+    function startLocalMeter(stream) {
+      const analyser = makeRmsNode(stream);
+      if (localMeterTimer) return;
+
+      localMeterTimer = setInterval(() => {
+        const rms = computeRms(analyser);
+        console.log("🎤 LOCAL RMS:", rms.toFixed(4));
+      }, 500);
+    }
+
+    function startRemoteMeter(stream) {
+      const analyser = makeRmsNode(stream);
+      if (remoteMeterTimer) return;
+
+      remoteMeterTimer = setInterval(() => {
+        const rms = computeRms(analyser);
+        console.log("🔊 REMOTE RMS:", rms.toFixed(4));
+      }, 500);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // ✅ Stats logger: proves RTP is flowing (bytes in/out)
+    // ─────────────────────────────────────────────────────────────
+    let statsTimer = null;
+
+    function startAudioStatsLogger() {
+      if (statsTimer) return;
+
+      statsTimer = setInterval(async () => {
+        if (!pc) return;
+
+        const stats = await pc.getStats();
+        let outAudio = null;
+        let inAudio = null;
+
+        stats.forEach(r => {
+          if (r.type === "outbound-rtp" && r.kind === "audio") outAudio = r;
+          if (r.type === "inbound-rtp" && r.kind === "audio") inAudio = r;
+        });
+
+        console.log("AUDIO OUT:",
+          outAudio ? { bytesSent: outAudio.bytesSent, packetsSent: outAudio.packetsSent } : "none"
+        );
+
+        console.log("AUDIO IN:",
+          inAudio ? { bytesReceived: inAudio.bytesReceived, packetsReceived: inAudio.packetsReceived, jitter: inAudio.jitter } : "none"
+        );
+      }, 2000);
+    }
+
+    function stopAudioStatsLogger() {
+      if (statsTimer) {
+        clearInterval(statsTimer);
+        statsTimer = null;
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // ✅ WAV Recording ONLY (NO MediaRecorder / NO .webm)
+    // ─────────────────────────────────────────────────────────────
+    let recCtx = null;
+    let recProcessor = null;
+    let recDestination = null;
+
+    let recording = false;
+    let recSampleRate = 48000;
+    let pcmChunks = []; // Float32Array[] interleaved mono
+
+    function buildMixedStreamForWav(localStream, remoteStream) {
+      recCtx = new (window.AudioContext || window.webkitAudioContext)();
+      recSampleRate = recCtx.sampleRate;
+
+      const localSource = recCtx.createMediaStreamSource(localStream);
+      const remoteSource = recCtx.createMediaStreamSource(remoteStream);
+
+      // optional: adjust volumes
+      const localGain = recCtx.createGain();
+      const remoteGain = recCtx.createGain();
+      localGain.gain.value = 1.0;
+      remoteGain.gain.value = 1.0;
+
+      recDestination = recCtx.createMediaStreamDestination();
+
+      localSource.connect(localGain).connect(recDestination);
+      remoteSource.connect(remoteGain).connect(recDestination);
+
+      return recDestination.stream;
+    }
+
+    function startRecordingWav(localStream, remoteStream) {
+      if (!localStream || !remoteStream) {
+        alert("Cannot record yet: waiting for streams. Start call and wait until remote audio is connected.");
+        return;
+      }
+      if (recording) return;
+
+      pcmChunks = [];
+      recording = true;
+
+      const mixedStream = buildMixedStreamForWav(localStream, remoteStream);
+      const mixedSource = recCtx.createMediaStreamSource(mixedStream);
+
+      // ScriptProcessor: stable for your test
+      const bufferSize = 4096;
+      recProcessor = recCtx.createScriptProcessor(bufferSize, 1, 1);
+
+      recProcessor.onaudioprocess = (e) => {
+        if (!recording) return;
+        const input = e.inputBuffer.getChannelData(0);
+        pcmChunks.push(new Float32Array(input)); // copy
+      };
+
+      mixedSource.connect(recProcessor);
+      recProcessor.connect(recCtx.destination); // required in some browsers
+
+      console.log("WAV recording started. sampleRate =", recSampleRate);
+    }
+
+    async function stopRecording() {
+      if (!recording) return;
+
+      recording = false;
+
+      try { if (recProcessor) recProcessor.disconnect(); } catch {}
+      try { if (recDestination) recDestination.disconnect && recDestination.disconnect(); } catch {}
+      recProcessor = null;
+      recDestination = null;
+
+      try { if (recCtx) await recCtx.close(); } catch {}
+      recCtx = null;
+
+      const wavBlob = floatToWavBlob(pcmChunks, recSampleRate);
+      pcmChunks = [];
+
+      console.log("WAV recording stopped. bytes =", wavBlob.size);
+
+      await uploadWav(wavBlob);
+    }
+
+    function startRec() {
+      startRecordingWav(localStream, remoteStream);
+    }
+
+    function floatToWavBlob(chunks, sampleRate) {
+      // Flatten
+      let length = 0;
+      for (const c of chunks) length += c.length;
+
+      const pcm = new Float32Array(length);
+      let offset = 0;
+      for (const c of chunks) {
+        pcm.set(c, offset);
+        offset += c.length;
+      }
+
+      // Convert float [-1..1] to 16-bit PCM
+      const buffer = new ArrayBuffer(44 + pcm.length * 2);
+      const view = new DataView(buffer);
+
+      function writeString(off, str) {
+        for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i));
+      }
+
+      const numChannels = 1;
+      const bitsPerSample = 16;
+      const byteRate = sampleRate * numChannels * bitsPerSample / 8;
+      const blockAlign = numChannels * bitsPerSample / 8;
+      const dataSize = pcm.length * 2;
+
+      writeString(0, "RIFF");
+      view.setUint32(4, 36 + dataSize, true);
+      writeString(8, "WAVE");
+      writeString(12, "fmt ");
+      view.setUint32(16, 16, true);        // PCM
+      view.setUint16(20, 1, true);         // format = 1
+      view.setUint16(22, numChannels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, byteRate, true);
+      view.setUint16(32, blockAlign, true);
+      view.setUint16(34, bitsPerSample, true);
+      writeString(36, "data");
+      view.setUint32(40, dataSize, true);
+
+      // PCM data
+      let idx = 44;
+      for (let i = 0; i < pcm.length; i++) {
+        let s = Math.max(-1, Math.min(1, pcm[i]));
+        const int16 = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        view.setInt16(idx, int16, true);
+        idx += 2;
+      }
+
+      return new Blob([buffer], { type: "audio/wav" });
+    }
+
+    async function uploadWav(blob) {
+      const fd = new FormData();
+      fd.append("file", blob, `call-${Date.now()}.wav`);
+      fd.append("chat_id", CHAT_ID || "");
+      fd.append("call_id", callId || "");
+      fd.append("role", ROLE || "unknown");
+
+      const res = await fetch("http://127.0.0.1:8013/call/upload", {
+        method: "POST",
+        body: fd
+      });
+
+      const data = await res.json();
+      console.log("Upload result:", data);
+
+      if (!data.ok) {
+        alert("Upload failed: " + (data.error || "unknown"));
+      } else {
+        alert("Saved WAV on server: " + (data.wav || data.file || "ok"));
+      }
+    }
+  </script>
+</body>
+</html>

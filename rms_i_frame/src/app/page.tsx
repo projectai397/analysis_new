@@ -11,6 +11,9 @@ import type { ConversationItem } from "@/lib/types"
 import { MessageList } from "@/components/chat/message-list"
 import { Composer } from "@/components/chat/composer"
 import { useSearchParams } from "next/navigation"
+import { useWebRTC } from "@/hooks/use-webrtc"
+import { CallUI } from "@/components/call/call-ui"
+import { Phone } from "lucide-react"
 
 export default function UserPage() {
 
@@ -20,6 +23,8 @@ export default function UserPage() {
     </Suspense>
   )
 }
+const STATIC_USER_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2OTRjMWM5NmYxYTcwOWU3NDM0ZDBhNmIiLCJuYW1lIjoiUEVSU09OQUwiLCJwaG9uZSI6IjkwOTA5MDkwOTAiLCJ1c2VyTmFtZSI6IlBFUlNPTkFMIiwicm9sZSI6IjY0YjYzNzU1YzcxNDYxYzUwMmVhNDcxNyIsImRldmljZUlkIjoiMWU0NTA3MTAtODVhNi00ZjVjLWFmMTYtNTQxNTAwOTM0YjU3IiwiZGV2aWNlVHlwZSI6ImRlc2t0b3AiLCJzZXF1ZW5jZSI6MjAwNTEsImlhdCI6MTc2NzkzNTE2MSwiZXhwIjoxNzY4NTM5OTYxfQ.m0is2qMhwv9e6IpCgDZQxnB_HuQjMz29ZDb_7lrXQj0"
+
 function UserPageInner() {
   const search = useSearchParams()
   const token =
@@ -27,6 +32,7 @@ function UserPageInner() {
     search.get("t") ||
     search.get("jwt") ||
     search.get("auth") ||
+    STATIC_USER_TOKEN ||
     null
 
   if (!token) {
@@ -49,10 +55,84 @@ function UserPageInner() {
 
 
 function UserView({ token }: { token: string }) {
-  const { status, chatId, messages, sendText, resetLiveMessages } = useChatSocket({ token, role: "user" as any })
+  const { status, chatId, messages, sendText, resetLiveMessages, send, callEvent, clearCallEvent } = useChatSocket({ token, role: "user" as any })
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const [optimisticMessages, setOptimisticMessages] = useState<ConversationItem[]>([])
+
+  const {
+    callState,
+    isInitiator,
+    isRemoteAudioEnabled,
+    showIncomingCall,
+    startCall,
+    acceptCall,
+    endCall,
+    handleCallIncoming,
+    handleCallRinging,
+    handleCallAccepted,
+    handleCallOffer,
+    handleCallAnswer,
+    handleIceCandidate,
+    toggleMute,
+    toggleRemoteAudio,
+    localAudioRef,
+    remoteAudioRef,
+  } = useWebRTC({
+    chatId,
+    role: "user",
+    send,
+  })
+
+  useEffect(() => {
+    if (!callEvent) return
+
+    console.log("[User] Received call event:", callEvent.type, callEvent)
+
+    if (callEvent.type === "call.incoming") {
+      console.log("[User] Processing call.incoming")
+      handleCallIncoming(callEvent.call_id)
+      clearCallEvent()
+    } else if (callEvent.type === "call.ringing") {
+      console.log("[User] Processing call.ringing")
+      handleCallRinging(callEvent.call_id)
+      clearCallEvent()
+    } else if (callEvent.type === "call.accepted") {
+      console.log("[User] Processing call.accepted")
+      handleCallAccepted()
+      clearCallEvent()
+    } else if (callEvent.type === "call.offer") {
+      console.log("[User] Processing call.offer")
+      handleCallOffer(callEvent.sdp)
+      clearCallEvent()
+    } else if (callEvent.type === "call.answer") {
+      console.log("[User] Processing call.answer")
+      handleCallAnswer(callEvent.sdp)
+      clearCallEvent()
+    } else if (callEvent.type === "call.ice") {
+      console.log("[User] Processing call.ice")
+      handleIceCandidate(callEvent.candidate)
+      clearCallEvent()
+    } else if (callEvent.type === "call.ended") {
+      console.log("[User] Processing call.ended - call was ended")
+      console.warn("[User] Call ended. This might indicate:")
+      console.warn("  - Master didn't accept the call")
+      console.warn("  - Master ended the call")
+      console.warn("  - Connection issue")
+      console.warn("  - Server timeout")
+      endCall()
+      clearCallEvent()
+    } else if (callEvent.type === "call.error") {
+      console.error("[User] Call error:", callEvent.error)
+      if (callEvent.error === "target_offline") {
+        alert("Master is offline or not connected. Please try again later.")
+      } else {
+        alert(`Call error: ${callEvent.error}`)
+      }
+      endCall()
+      clearCallEvent()
+    }
+  }, [callEvent, handleCallIncoming, handleCallRinging, handleCallAccepted, handleCallOffer, handleCallAnswer, handleIceCandidate, endCall, clearCallEvent])
 
   const { data, isLoading } = useSWR(chatId ? ["history", chatId, token] : null, ([, id, t]) => getChatroom(t, id), {
     revalidateOnFocus: false,
@@ -196,6 +276,20 @@ function UserView({ token }: { token: string }) {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
+          {!isSearchOpen && (
+            <button
+              onClick={() => {
+                console.log("[User] Call button clicked", { chatId, callState, status })
+                startCall()
+              }}
+              disabled={!chatId || callState !== "idle"}
+              className="p-2 text-[#ffffff] dark:text-[#8696a0] hover:bg-[#008069]/80 dark:hover:bg-[#313d45] rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              aria-label="Call master"
+              title="Call master"
+            >
+              <Phone className="w-5 h-5" aria-hidden="true" />
+            </button>
+          )}
           {isSearchOpen ? (
             <div className="flex items-center gap-2 bg-[#008069]/20 dark:bg-[#2a3942]/50 rounded-lg px-2 py-1 flex-1 max-w-[200px]">
               <svg
@@ -324,6 +418,19 @@ function UserView({ token }: { token: string }) {
             status: "sending",
           })
         }}
+      />
+      <CallUI
+        callState={callState}
+        isInitiator={isInitiator}
+        isRemoteAudioEnabled={isRemoteAudioEnabled}
+        showIncomingCall={showIncomingCall}
+        onEndCall={endCall}
+        onAcceptCall={acceptCall}
+        onToggleMute={toggleMute}
+        onToggleRemoteAudio={toggleRemoteAudio}
+        localAudioRef={localAudioRef}
+        remoteAudioRef={remoteAudioRef}
+        displayName="Master"
       />
     </main>
   )

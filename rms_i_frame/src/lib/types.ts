@@ -77,6 +77,59 @@ export type ServerError = {
   error: "invalid_json" | "no_chat_selected" | string
 }
 
+export type ServerCallIncoming = {
+  type: "call.incoming"
+  call_id: string
+  chat_id: string
+  from_user_id: string
+  from_role: string
+  to_role: string
+}
+
+export type ServerCallRinging = {
+  type: "call.ringing"
+  call_id: string
+  chat_id: string
+}
+
+export type ServerCallAccepted = {
+  type: "call.accepted"
+  call_id: string
+  chat_id: string
+}
+
+export type ServerCallOffer = {
+  type: "call.offer"
+  call_id: string
+  chat_id: string
+  sdp: RTCSessionDescriptionInit
+}
+
+export type ServerCallAnswer = {
+  type: "call.answer"
+  call_id: string
+  chat_id: string
+  sdp: RTCSessionDescriptionInit
+}
+
+export type ServerCallIce = {
+  type: "call.ice"
+  call_id: string
+  chat_id: string
+  candidate: RTCIceCandidateInit
+}
+
+export type ServerCallEnded = {
+  type: "call.ended"
+  call_id: string
+  chat_id: string
+}
+
+export type ServerCallError = {
+  type: "call.error"
+  error: string
+}
+
 export type ServerEvent =
   | ServerJoinedUser
   | ServerJoinedAdminList
@@ -86,11 +139,26 @@ export type ServerEvent =
   | ServerFileMessage
   | ServerAudioMessage
   | ServerError
+  | ServerCallIncoming
+  | ServerCallRinging
+  | ServerCallAccepted
+  | ServerCallOffer
+  | ServerCallAnswer
+  | ServerCallIce
+  | ServerCallEnded
+  | ServerCallError
 
 export type ClientPing = { type: "ping" }
 export type ClientSelectRoom = { type: "select_chatroom"; chat_id: string }
 export type ClientSendText = { type: "message"; text: string }
-export type ClientEvent = ClientPing | ClientSelectRoom | ClientSendText
+export type ClientCallStart = { type: "call.start" }
+export type ClientCallAccept = { type: "call.accept"; call_id: string }
+export type ClientCallReject = { type: "call.reject"; call_id: string }
+export type ClientCallOffer = { type: "call.offer"; call_id: string; sdp: RTCSessionDescriptionInit }
+export type ClientCallAnswer = { type: "call.answer"; call_id: string; sdp: RTCSessionDescriptionInit }
+export type ClientCallIce = { type: "call.ice"; call_id: string; candidate: RTCIceCandidateInit }
+export type ClientCallEnd = { type: "call.end"; call_id: string }
+export type ClientEvent = ClientPing | ClientSelectRoom | ClientSendText | ClientCallStart | ClientCallAccept | ClientCallReject | ClientCallOffer | ClientCallAnswer | ClientCallIce | ClientCallEnd
 
 export type ConversationItem =
   | {
