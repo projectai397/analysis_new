@@ -59,6 +59,14 @@ from src.helpers.build_service import (materialize_admins_analysis,
                                        materialize_superadmins_users)
 from src.helpers.s3 import backup_mongo_to_archive, upload_backup_to_s3
 from src.helpers.util import sync_orders_to_trade
+from src.helpers.hierarchy_service import (
+    get_admins_for_superadmin,
+    get_masters_for_superadmin,
+    get_users_for_superadmin,
+    get_masters_for_admin,
+    get_users_for_admin,
+    get_users_for_master,
+)
 from src.models import Chatroom, Message, ProUser, SCUser
 from werkzeug.utils import secure_filename
 from threading import Lock, Timer
@@ -908,7 +916,123 @@ def create_app() -> Flask:
                 except Exception:
                     return None
 
-            def _get_chatrooms_paginated(page=1, search_query=None, limit=50):
+            def _get_chatrooms_for_admin(admin_id_oid, page=1, limit=50):
+                admin_staff_bot = Chatroom.objects(user_id=admin_id_oid, room_type="staff_bot").first()
+                masters = get_masters_for_admin(admin_id_oid)
+
+                chatrooms = []
+                if admin_staff_bot:
+                    chatrooms.append({
+                        "chat_id": str(admin_staff_bot.id),
+                        "user_id": str(admin_staff_bot.user_id) if admin_staff_bot.user_id else None,
+                        "is_user_active": bool(getattr(admin_staff_bot, "is_user_active", False)),
+                        "is_superadmin_active": bool(getattr(admin_staff_bot, "is_superadmin_active", False)),
+                        "is_owner_active": bool(getattr(admin_staff_bot, "is_owner_active", False)),
+                        "is_admin_active": bool(getattr(admin_staff_bot, "is_admin_active", False)),
+                        "updated_time": _iso(getattr(admin_staff_bot, "updated_time", None) or getattr(admin_staff_bot, "created_time", None)),
+                        "user": {"name": "", "userName": "", "phone": ""},
+                        "room_type": "staff_bot",
+                    })
+
+                masters_list = [
+                    {
+                        "id": m.get("_id"),
+                        "name": m.get("name") or "",
+                        "userName": m.get("username") or "",
+                        "phone": m.get("phone") or "",
+                    }
+                    for m in masters
+                ]
+
+                return {
+                    "chatrooms": chatrooms,
+                    "masters": masters_list,
+                    "total_count": len(chatrooms),
+                    "total_pages": 1,
+                    "current_page": 1,
+                    "limit": limit,
+                }
+
+            def _get_chatrooms_for_master(master_id_oid, page=1, limit=50):
+                base_fields = (
+                    "id",
+                    "user_id",
+                    "is_user_active",
+                    "is_superadmin_active",
+                    "is_owner_active",
+                    "is_admin_active",
+                    "updated_time",
+                    "created_time",
+                    "room_type",
+                    "owner_id",
+                    "admin_id",
+                    "super_admin_id",
+                )
+
+                master_staff_bot = Chatroom.objects(user_id=master_id_oid, room_type="staff_bot").first()
+                master_chatrooms = Chatroom.objects(super_admin_id=master_id_oid).only(*base_fields).order_by("-updated_time")
+
+                users = get_users_for_master(master_id_oid)
+                user_ids = [_as_oid(u.get("_id")) for u in users if u.get("_id")]
+                user_chatrooms = Chatroom.objects(user_id__in=user_ids).only(*base_fields).order_by("-updated_time") if user_ids else Chatroom.objects(id=None)
+
+                all_rooms = list(master_chatrooms) + list(user_chatrooms)
+                if master_staff_bot:
+                    all_rooms.insert(0, master_staff_bot)
+
+                all_rooms = sorted(all_rooms, key=lambda r: getattr(r, "updated_time", getattr(r, "created_time", datetime.min.replace(tzinfo=timezone.utc))), reverse=True)
+
+                total_count = len(all_rooms)
+                total_pages = (total_count + limit - 1) // limit if limit > 0 else 1
+                page = max(1, min(page, total_pages)) if total_pages > 0 else 1
+                skip = (page - 1) * limit
+                rooms_list = all_rooms[skip:skip + limit]
+
+                user_oid_set = {
+                    _as_oid(getattr(r, "user_id", None))
+                    for r in rooms_list
+                    if getattr(r, "user_id", None)
+                }
+                user_oid_list = [oid for oid in user_oid_set if oid is not None]
+
+                meta_by_userid = {}
+                if user_oid_list:
+                    cursor = support_users_coll.find(
+                        {"user_id": {"$in": user_oid_list}},
+                        {"_id": 0, "user_id": 1, "name": 1, "userName": 1, "user_name": 1, "phone": 1},
+                    )
+                    for doc in cursor:
+                        key = str(doc.get("user_id"))
+                        meta_by_userid[key] = {
+                            "name": doc.get("name") or "",
+                            "userName": (doc.get("userName") or doc.get("user_name") or ""),
+                            "phone": doc.get("phone") or "",
+                        }
+
+                chatrooms = [
+                    {
+                        "chat_id": str(r.id),
+                        "user_id": str(r.user_id) if r.user_id else None,
+                        "is_user_active": bool(getattr(r, "is_user_active", False)),
+                        "is_superadmin_active": bool(getattr(r, "is_superadmin_active", False)),
+                        "is_owner_active": bool(getattr(r, "is_owner_active", False)),
+                        "is_admin_active": bool(getattr(r, "is_admin_active", False)),
+                        "updated_time": _iso(getattr(r, "updated_time", None) or getattr(r, "created_time", None)),
+                        "user": meta_by_userid.get(str(getattr(r, "user_id", "")), {"name": "", "userName": "", "phone": ""}),
+                        "room_type": (getattr(r, "room_type", None) or "support"),
+                    }
+                    for r in rooms_list
+                ]
+
+                return {
+                    "chatrooms": chatrooms,
+                    "total_count": total_count,
+                    "total_pages": total_pages,
+                    "current_page": page,
+                    "limit": limit,
+                }
+
+            def _get_chatrooms_paginated(page=1, search_query=None, limit=50, selected_admin_id=None, selected_master_id=None):
                 base_fields = (
                     "id",
                     "user_id",
@@ -925,6 +1049,12 @@ def create_app() -> Flask:
                 )
 
                 from mongoengine.queryset.visitor import Q
+
+                if selected_admin_id:
+                    return _get_chatrooms_for_admin(_as_oid(selected_admin_id), page, limit)
+
+                if selected_master_id:
+                    return _get_chatrooms_for_master(_as_oid(selected_master_id), page, limit)
 
                 if is_superadmin:
                     try:
@@ -1228,20 +1358,110 @@ def create_app() -> Flask:
 
                 # --- list rooms for selection (no params) ---
                 else:
-                    result = _get_chatrooms_paginated(page=1, search_query=None, limit=50)
+                    if is_superadmin:
+                        admins = get_admins_for_superadmin(pro_id)
+                        superadmin_staff_bot = Chatroom.objects(user_id=pro_id, room_type="staff_bot").first()
+                        
+                        admins_list = [
+                            {
+                                "id": a.get("_id"),
+                                "name": a.get("name") or "",
+                                "userName": a.get("username") or "",
+                                "phone": a.get("phone") or "",
+                            }
+                            for a in admins
+                        ]
 
-                    payload = {
-                        "type": "joined",
-                        "role": conn_role,
-                        "needs_selection": True,
-                        "chatrooms": result["chatrooms"],
-                        "pagination": {
-                            "total_count": result["total_count"],
-                            "total_pages": result["total_pages"],
-                            "current_page": result["current_page"],
-                            "limit": result["limit"],
-                        },
-                    }
+                        chatrooms_list = []
+                        if superadmin_staff_bot:
+                            chatrooms_list.append({
+                                "chat_id": str(superadmin_staff_bot.id),
+                                "user_id": str(superadmin_staff_bot.user_id) if superadmin_staff_bot.user_id else None,
+                                "is_user_active": bool(getattr(superadmin_staff_bot, "is_user_active", False)),
+                                "is_superadmin_active": bool(getattr(superadmin_staff_bot, "is_superadmin_active", False)),
+                                "is_owner_active": bool(getattr(superadmin_staff_bot, "is_owner_active", False)),
+                                "is_admin_active": bool(getattr(superadmin_staff_bot, "is_admin_active", False)),
+                                "updated_time": _iso(getattr(superadmin_staff_bot, "updated_time", None) or getattr(superadmin_staff_bot, "created_time", None)),
+                                "user": {"name": "", "userName": "", "phone": ""},
+                                "room_type": "staff_bot",
+                            })
+
+                        payload = {
+                            "type": "joined",
+                            "role": conn_role,
+                            "needs_selection": True,
+                            "hierarchy": {
+                                "type": "superadmin",
+                                "admins": admins_list,
+                            },
+                            "chatrooms": chatrooms_list,
+                        }
+                    elif is_admin:
+                        masters = get_masters_for_admin(pro_id)
+                        admin_staff_bot = Chatroom.objects(user_id=pro_id, room_type="staff_bot").first()
+
+                        masters_list = [
+                            {
+                                "id": m.get("_id"),
+                                "name": m.get("name") or "",
+                                "userName": m.get("username") or "",
+                                "phone": m.get("phone") or "",
+                            }
+                            for m in masters
+                        ]
+
+                        chatrooms_list = []
+                        if admin_staff_bot:
+                            chatrooms_list.append({
+                                "chat_id": str(admin_staff_bot.id),
+                                "user_id": str(admin_staff_bot.user_id) if admin_staff_bot.user_id else None,
+                                "is_user_active": bool(getattr(admin_staff_bot, "is_user_active", False)),
+                                "is_superadmin_active": bool(getattr(admin_staff_bot, "is_superadmin_active", False)),
+                                "is_owner_active": bool(getattr(admin_staff_bot, "is_owner_active", False)),
+                                "is_admin_active": bool(getattr(admin_staff_bot, "is_admin_active", False)),
+                                "updated_time": _iso(getattr(admin_staff_bot, "updated_time", None) or getattr(admin_staff_bot, "created_time", None)),
+                                "user": {"name": "", "userName": "", "phone": ""},
+                                "room_type": "staff_bot",
+                            })
+
+                        payload = {
+                            "type": "joined",
+                            "role": conn_role,
+                            "needs_selection": True,
+                            "hierarchy": {
+                                "type": "admin",
+                                "masters": masters_list,
+                            },
+                            "chatrooms": chatrooms_list,
+                        }
+                    elif is_master:
+                        result = _get_chatrooms_for_master(pro_id, page=1, limit=50)
+                        payload = {
+                            "type": "joined",
+                            "role": conn_role,
+                            "needs_selection": True,
+                            "chatrooms": result["chatrooms"],
+                            "pagination": {
+                                "total_count": result["total_count"],
+                                "total_pages": result["total_pages"],
+                                "current_page": result["current_page"],
+                                "limit": result["limit"],
+                            },
+                        }
+                    else:
+                        result = _get_chatrooms_paginated(page=1, search_query=None, limit=50)
+                        payload = {
+                            "type": "joined",
+                            "role": conn_role,
+                            "needs_selection": True,
+                            "chatrooms": result["chatrooms"],
+                            "pagination": {
+                                "total_count": result["total_count"],
+                                "total_pages": result["total_pages"],
+                                "current_page": result["current_page"],
+                                "limit": result["limit"],
+                            },
+                        }
                     ws.send(json.dumps(payload))
                     last_activity["ts"] = time.time()
 
@@ -1359,6 +1579,88 @@ def create_app() -> Flask:
                     room_add(chat_id, ws)
                     mark_role_join(chat, conn_role, ws)
                     ws.send(json.dumps({"type": "selected", "chat_id": chat_id, "role": conn_role}))
+                    last_activity["ts"] = time.time()
+                    continue
+
+                if t == "select_admin" and is_superadmin:
+                    admin_id = data.get("admin_id")
+                    if not admin_id:
+                        ws.send(json.dumps({"type": "error", "error": "admin_id_required"}))
+                        last_activity["ts"] = time.time()
+                        continue
+
+                    admin_oid = _as_oid(admin_id)
+                    if not admin_oid:
+                        ws.send(json.dumps({"type": "error", "error": "invalid_admin_id"}))
+                        last_activity["ts"] = time.time()
+                        continue
+
+                    admins = get_admins_for_superadmin(pro_id)
+                    if not any(_as_oid(a.get("_id")) == admin_oid for a in admins):
+                        ws.send(json.dumps({"type": "error", "error": "forbidden_admin"}))
+                        last_activity["ts"] = time.time()
+                        continue
+
+                    result = _get_chatrooms_for_admin(admin_oid, page=1, limit=50)
+                    payload = {
+                        "type": "admin_selected",
+                        "admin_id": admin_id,
+                        "chatrooms": result["chatrooms"],
+                        "masters": result.get("masters", []),
+                        "pagination": {
+                            "total_count": result["total_count"],
+                            "total_pages": result["total_pages"],
+                            "current_page": result["current_page"],
+                            "limit": result["limit"],
+                        },
+                    }
+                    ws.send(json.dumps(payload))
+                    last_activity["ts"] = time.time()
+                    continue
+
+                if t == "select_master" and (is_superadmin or is_admin):
+                    master_id = data.get("master_id")
+                    if not master_id:
+                        ws.send(json.dumps({"type": "error", "error": "master_id_required"}))
+                        last_activity["ts"] = time.time()
+                        continue
+
+                    master_oid = _as_oid(master_id)
+                    if not master_oid:
+                        ws.send(json.dumps({"type": "error", "error": "invalid_master_id"}))
+                        last_activity["ts"] = time.time()
+                        continue
+
+                    if is_superadmin:
+                        admin_id = data.get("admin_id")
+                        if admin_id:
+                            admin_oid = _as_oid(admin_id)
+                            if admin_oid:
+                                masters = get_masters_for_admin(admin_oid)
+                                if not any(_as_oid(m.get("_id")) == master_oid for m in masters):
+                                    ws.send(json.dumps({"type": "error", "error": "forbidden_master"}))
+                                    last_activity["ts"] = time.time()
+                                    continue
+                    elif is_admin:
+                        masters = get_masters_for_admin(pro_id)
+                        if not any(_as_oid(m.get("_id")) == master_oid for m in masters):
+                            ws.send(json.dumps({"type": "error", "error": "forbidden_master"}))
+                            last_activity["ts"] = time.time()
+                            continue
+
+                    result = _get_chatrooms_for_master(master_oid, page=1, limit=50)
+                    payload = {
+                        "type": "master_selected",
+                        "master_id": master_id,
+                        "chatrooms": result["chatrooms"],
+                        "pagination": {
+                            "total_count": result["total_count"],
+                            "total_pages": result["total_pages"],
+                            "current_page": result["current_page"],
+                            "limit": result["limit"],
+                        },
+                    }
+                    ws.send(json.dumps(payload))
                     last_activity["ts"] = time.time()
                     continue
 
