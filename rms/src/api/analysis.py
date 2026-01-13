@@ -11,19 +11,22 @@ from src.helpers.pipelines import (_get_live_user_ids,
                                    kpi_pipeline_for_positions)
 from src.helpers.pipelines import \
     pipelines as _pipelines  # kept to avoid changing imports
-from src.helpers.pipelines import weekly_kpi_pipeline
+from src.helpers.pipelines import weekly_kpi_pipeline, kpis_from_orders_pipeline
 from src.helpers.util import auth_superadmin
 from src.helpers.util import ist_week_window_now_for as week_window_now
-from src.helpers.util import resolve_caps_by_balance, try_object_id
+from src.helpers.util import resolve_caps_by_balance, try_object_id, ist_week_window_weekly
 from src.helpers import hierarchy_service as hs
+from src.helpers.build_service import _user_match_single, _calculate_benford_law, _time_exec_between
+from src.api.finance import _resolve_user_balance
 from ..config import users
 
 from ..config import analysis as analysis_col
 from ..config import analysis_users as analysis_users_col
 from ..config import config
 from ..config import data as data_col
-from ..config import wallets
+from ..config import wallets, orders, trade_market
 from ..extensions import cache
+import random
 
 ns = Namespace("analysis")
 
@@ -673,11 +676,28 @@ class UsersTopRisk(Resource):
             return {"ok": False, "error": str(e)}, 500
 
 
+def _get_superadmin_id_for_user(user_id: ObjectId) -> ObjectId:
+    current = user_id
+    for _ in range(12):
+        doc = users.find_one({"_id": current}, {"_id": 1, "role": 1, "parentId": 1})
+        if not doc:
+            break
+        role = doc.get("role")
+        if role == config.SUPERADMIN_ROLE_ID:
+            return doc["_id"]
+        parent = doc.get("parentId")
+        if not parent:
+            break
+        current = parent
+    return None
+
+
 @ns.route("/user-list")
 class UserList(Resource):
     """
     GET /analysis/user-list?limit=10
-    Returns N random active (status=1) users from analysis_users.
+    Returns N random active (status=1) users from users collection.
+    Computes all metrics on-the-fly without saving.
     Filtered by the logged-in user's role (superadmin/admin/master).
     """
 
@@ -699,58 +719,92 @@ class UserList(Resource):
                 limit = 10
             limit = max(1, min(limit, 50))
 
-            match_filter = {"status": 1}
-
-            if role == "superadmin":
-                match_filter["superadmin_id"] = g.current_user_oid
-                logger.info(f"Filtering by superadmin_id: {g.current_user_oid}")
-            else:
-                user_ids = _get_user_ids_for_current_role()
-                logger.info(f"Retrieved {len(user_ids)} user_ids for role {role}")
-                if not user_ids:
-                    logger.warning(f"No user_ids found for role {role}, returning empty result")
-                    return {
-                        "ok": True,
-                        "count": 0,
-                        "limit": limit,
-                        "items": [],
-                    }, 200
-                match_filter["user_id"] = {"$in": user_ids}
-                logger.info(f"Filtering by user_id with {len(user_ids)} IDs: {[str(uid) for uid in user_ids[:5]]}...")
-
-            logger.info(f"Final match_filter: {match_filter}")
-
-            pipeline = [
-                {"$match": match_filter},
-                {"$sample": {"size": limit}},
-                {
-                    "$project": {
-                        "_id": 1,
-                        "superadmin_id": 1,
-                        "user_id": 1,
-                        "email": 1,
-                        "name": 1,
-                        "status": 1,
-                        "total_trades": 1,
-                        "win_trades": 1,
-                        "win_percent": 1,
-                        "total_volume": 1,
-                        "balance": 1,
-                        "avg_risk_score": 1,
-                        "avg_risk_status": 1,
-                        "generated_at": 1,
-                        "window": 1,
+            start, end = ist_week_window_weekly()
+            
+            user_ids = _get_user_ids_for_current_role()
+            logger.info(f"Retrieved {len(user_ids)} user_ids for role {role}")
+            
+            if not user_ids:
+                logger.warning(f"No user_ids found for role {role}, returning empty result")
+                return {
+                    "ok": True,
+                    "count": 0,
+                    "limit": limit,
+                    "items": [],
+                }, 200
+            
+            user_docs = list(users.find(
+                {"_id": {"$in": user_ids}, "status": 1},
+                {"_id": 1, "email": 1, "name": 1, "userName": 1, "fullName": 1, "status": 1}
+            ))
+            
+            if not user_docs:
+                return {
+                    "ok": True,
+                    "count": 0,
+                    "limit": limit,
+                    "items": [],
+                }, 200
+            
+            if len(user_docs) > limit:
+                user_docs = random.sample(user_docs, limit)
+            
+            results = []
+            for u in user_docs:
+                try:
+                    u_id = u.get("_id") or u.get("id")
+                    if not u_id:
+                        continue
+                    u_id = ObjectId(u_id)
+                    
+                    superadmin_id = _get_superadmin_id_for_user(u_id)
+                    
+                    match_one = {
+                        **_time_exec_between(start, end),
+                        **_user_match_single(u_id),
                     }
-                },
-            ]
-
-            docs = list(analysis_users_col.aggregate(pipeline, allowDiskUse=True))
-            logger.info(f"Aggregation returned {len(docs)} docs")
+                    
+                    pipeline = kpis_from_orders_pipeline(match_one, start=start, end=end)
+                    agg_result = list(orders.aggregate(pipeline))
+                    kpis = agg_result[0] if agg_result else {}
+                    
+                    overall = kpis.get("overall", {}) if isinstance(kpis.get("overall", {}), dict) else {}
+                    
+                    balance_val = _resolve_user_balance(u_id, u)
+                    benford_law = _calculate_benford_law(u_id, start, end)
+                    
+                    user_result = {
+                        "_id": str(u_id),
+                        "superadmin_id": str(superadmin_id) if superadmin_id else None,
+                        "user_id": str(u_id),
+                        "email": u.get("email"),
+                        "name": u.get("name") or u.get("userName") or u.get("fullName"),
+                        "status": u.get("status"),
+                        "total_trades": overall.get("total_trades", 0),
+                        "win_trades": overall.get("win_trades", 0),
+                        "win_percent": overall.get("win_percent", 0.0),
+                        "total_volume": overall.get("total_volume", 0.0),
+                        "balance": balance_val,
+                        "avg_risk_score": kpis.get("avg_risk_score", 0.0),
+                        "avg_risk_status": kpis.get("avg_risk_status", "Low Risk"),
+                        "benford_law": benford_law,
+                        "generated_at": _dt.utcnow().isoformat() + "Z",
+                        "window": {
+                            "start": start.isoformat() + "Z",
+                            "end": end.isoformat() + "Z",
+                            "tz": "Asia/Kolkata",
+                        },
+                    }
+                    results.append(user_result)
+                except Exception as e:
+                    logger.error(f"Error computing stats for user {u.get('_id')}: {str(e)}", exc_info=True)
+                    continue
+            
             return {
                 "ok": True,
-                "count": len(docs),
+                "count": len(results),
                 "limit": limit,
-                "items": _safe(docs),
+                "items": results,
             }, 200
 
         except Exception as e:

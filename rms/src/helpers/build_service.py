@@ -30,7 +30,7 @@ from src.helpers.users_flat import (find_superadmins,
                                     get_flat_users_under_superadmin)
 from src.helpers.util import ist_week_window_now_for, ist_week_window_weekly
 
-from ..config import analysis, analysis_users, config, orders, users
+from ..config import analysis, analysis_users, config, orders, trade_market, users
 
 IST_TZ = pytz.timezone("Asia/Kolkata")
 # -------------------------- filters & helpers --------------------------
@@ -69,6 +69,114 @@ def _user_match_or(user_ids: List[ObjectId]) -> Dict[str, Any]:
 def _user_match_single(u_id: ObjectId) -> Dict[str, Any]:
     s = str(u_id)
     return {"$or": [{"user_id": u_id}, {"user_id": s}, {"userId": u_id}, {"userId": s}]}
+
+
+def _get_first_nonzero_digit(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        num_str = str(abs(float(value)))
+        for char in num_str:
+            if char.isdigit() and char != '0':
+                return int(char)
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+BENFORD_EXPECTED = {
+    1: 30.1,
+    2: 17.6,
+    3: 12.5,
+    4: 9.7,
+    5: 7.9,
+    6: 6.7,
+    7: 5.8,
+    8: 5.1,
+    9: 4.6,
+}
+
+
+def _calculate_benford_law(user_id: ObjectId, start: datetime, end: datetime) -> Dict[str, Any]:
+    try:
+        user_id_str = str(user_id)
+        query = {
+            "$or": [
+                {"userId": user_id},
+                {"userId": user_id_str},
+                {"user_id": user_id},
+                {"user_id": user_id_str},
+            ],
+            "createdAt": {"$gte": start, "$lt": end},
+        }
+        
+        trades = list(trade_market.find(query, {"totalQuantity": 1, "total": 1}))
+        
+        total_qty_digits = []
+        total_digits = []
+        
+        for trade in trades:
+            qty_digit = _get_first_nonzero_digit(trade.get("totalQuantity"))
+            if qty_digit:
+                total_qty_digits.append(qty_digit)
+            
+            total_digit = _get_first_nonzero_digit(trade.get("total"))
+            if total_digit:
+                total_digits.append(total_digit)
+        
+        def _calculate_stats(digits: List[int]) -> List[Dict[str, Any]]:
+            if not digits:
+                return [
+                    {
+                        "number": i,
+                        "expected_percent": BENFORD_EXPECTED[i],
+                        "count": 0,
+                        "actual_percent": 0.0,
+                    }
+                    for i in range(1, 10)
+                ]
+            
+            counts = {i: 0 for i in range(1, 10)}
+            for digit in digits:
+                if 1 <= digit <= 9:
+                    counts[digit] += 1
+            
+            total_count = len(digits)
+            return [
+                {
+                    "number": i,
+                    "expected_percent": BENFORD_EXPECTED[i],
+                    "count": counts[i],
+                    "actual_percent": round((counts[i] / total_count) * 100, 2) if total_count > 0 else 0.0,
+                }
+                for i in range(1, 10)
+            ]
+        
+        return {
+            "totalQuantity": _calculate_stats(total_qty_digits),
+            "total": _calculate_stats(total_digits),
+        }
+    except Exception:
+        return {
+            "totalQuantity": [
+                {
+                    "number": i,
+                    "expected_percent": BENFORD_EXPECTED[i],
+                    "count": 0,
+                    "actual_percent": 0.0,
+                }
+                for i in range(1, 10)
+            ],
+            "total": [
+                {
+                    "number": i,
+                    "expected_percent": BENFORD_EXPECTED[i],
+                    "count": 0,
+                    "actual_percent": 0.0,
+                }
+                for i in range(1, 10)
+            ],
+        }
 
 
 # -------------------------- indexes --------------------------
@@ -384,6 +492,9 @@ def build_user_stats_doc(
     )
     user_stats = next((p for p in per_users if p.get("_id") == u_id), {}) or {}
     balance_val = _resolve_user_balance(u_id, u)
+    
+    benford_law = _calculate_benford_law(u_id, start, end)
+    
     return {
         "superadmin_id": super_oid,
         "user_id": u_id,
@@ -405,6 +516,7 @@ def build_user_stats_doc(
         "avg_risk_score": kpis.get("avg_risk_score", 0.0),
         "avg_risk_status": kpis.get("avg_risk_status", "Low Risk"),
         "wash_trade": wash_trade,
+        "benford_law": benford_law,
         "generated_at": datetime.utcnow(),
         "window": {"start": start, "end": end, "tz": "Asia/Kolkata"},
     }
