@@ -3,6 +3,7 @@
 from typing import Dict, Any, List, Tuple
 import logging
 import html
+import asyncio
 from datetime import datetime
 from bson import ObjectId
 
@@ -169,11 +170,8 @@ def build_user_summary_text(u: Dict[str, Any], category: str) -> str:
         ("Credit", "credit"),
         ("Balance", "balance"),
         ("Profit / Loss", "profitLoss"),
-        ("Allowed Devices", "allowedDevices"),
         ("Created At", "createdAt"),
-        ("Is B2B", "isB2B"),
         ("Device ID", "deviceId"),
-        ("Forward Balance", "forwardBalance"),
     ]
 
     rows: List[str] = []
@@ -183,15 +181,26 @@ def build_user_summary_text(u: Dict[str, Any], category: str) -> str:
         raw_val = u.get(key, "-")
         if isinstance(raw_val, ObjectId):
             raw_val = str(raw_val)
-        if key == "isB2B":
-            raw_val = "Yes" if raw_val else "No"
         if isinstance(raw_val, datetime):
             raw_val = raw_val.isoformat()
-        text_val = "-" if raw_val is None else str(raw_val)
-        rows.append(f"{label.ljust(label_width)} : {text_val}")
+        
+        if key == "profitLoss":
+            try:
+                pnl_val = float(raw_val) if raw_val not in [None, "-"] else 0.0
+                if pnl_val >= 0:
+                    text_val = f"+{pnl_val}"
+                    rows.append(f"{label.ljust(label_width)} : {text_val}")
+                else:
+                    text_val = str(pnl_val)
+                    rows.append(f"{label.ljust(label_width)} : {text_val}")
+            except (ValueError, TypeError):
+                text_val = "-" if raw_val is None else str(raw_val)
+                rows.append(f"{label.ljust(label_width)} : {text_val}")
+        else:
+            text_val = "-" if raw_val is None else str(raw_val)
+            rows.append(f"{label.ljust(label_width)} : {text_val}")
 
-    table_text = "\n".join(rows)
-    table_text = html.escape(table_text)
+    table_text = "\n".join(html.escape(row) for row in rows)
 
     header = (
         "👤 <b>User Summary</b>\n"
@@ -678,10 +687,25 @@ async def user_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if category in ["admin", "master", "client"]:
-        role_id = ObjectId(uid)
-        calculated_pnl = calculate_role_total_pnl(role_id, category)
-        full_doc = full_doc.copy()
-        full_doc["profitLoss"] = calculated_pnl
+        processing_msg = await query.message.reply_text("⏳ Calculating PnL...")
+        remember_bot_message_from_message(update, processing_msg)
+        
+        try:
+            role_id = ObjectId(uid)
+            calculated_pnl = await asyncio.to_thread(calculate_role_total_pnl, role_id, category)
+            full_doc = full_doc.copy()
+            full_doc["profitLoss"] = calculated_pnl
+            
+            try:
+                await processing_msg.delete()
+            except Exception:
+                pass
+        except Exception as e:
+            logger.error(f"Error calculating PnL: {e}", exc_info=True)
+            try:
+                await processing_msg.edit_text("⚠️ Error calculating PnL. Showing without calculated PnL.")
+            except Exception:
+                pass
 
     header = build_user_summary_text(full_doc, category)
     msg = await query.message.reply_text(header, parse_mode="HTML")

@@ -226,10 +226,10 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
     doc = SimpleDocTemplate(
         buffer, 
         pagesize=A4,
-        leftMargin=0.5*inch,
-        rightMargin=0.5*inch,
-        topMargin=0.5*inch,
-        bottomMargin=0.5*inch
+        leftMargin=0.3*inch,
+        rightMargin=0.3*inch,
+        topMargin=0.3*inch,
+        bottomMargin=0.3*inch
     )
     story = []
     
@@ -254,13 +254,11 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
     story.append(Paragraph(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", date_style))
     story.append(Spacer(1, 0.3*inch))
     
-    data = [["Username", "Parent", "Balance", "PnL", "Asset Value", "Equity", "Use\nMargin", "Margin\nLevel", "Office"]]
+    data = [["Username", "Parent", "Balance", "PnL", "Asset Value"]]
     
     total_balance = 0.0
     total_pnl = 0.0
     total_asset_value = 0.0
-    total_equity = 0.0
-    total_use_margin = 0.0
     
     for user_doc in user_data_list:
         username = (
@@ -276,17 +274,10 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
         
         pnl = calculate_user_pnl(user_id)
         asset_value = balance + pnl
-        credit = float(user_doc.get("credit") or 0)
-        equity = balance + pnl + credit
-        use_margin = calculate_use_margin(user_id)
-        margin_level = (equity / use_margin * 100) if use_margin > 0 else 0.0
-        office_value = calculate_office_pnl_value(user_doc, pnl)
         
         total_balance += balance
         total_pnl += pnl
         total_asset_value += asset_value
-        total_equity += equity
-        total_use_margin += use_margin
         
         is_minus = pnl < 0
         text_color = colors.green if is_minus else colors.red
@@ -300,15 +291,8 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
             f"{balance:,.2f}",
             f"{pnl:,.2f}",
             f"{asset_value:,.2f}",
-            f"{equity:,.2f}",
-            f"{use_margin:,.2f}",
-            f"{margin_level:.2f}%",
-            f"{office_value:,.2f}",
         ]
         data.append(row)
-    
-    total_margin_level = (total_equity / total_use_margin * 100) if total_use_margin > 0 else 0.0
-    total_office_value = sum(calculate_office_pnl_value(u, calculate_user_pnl(u.get("_id"))) for u in user_data_list)
     
     total_row_idx = len(data)
     data.append([
@@ -317,13 +301,11 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
         f"{total_balance:,.2f}",
         f"{total_pnl:,.2f}",
         f"{total_asset_value:,.2f}",
-        f"{total_equity:,.2f}",
-        f"{total_use_margin:,.2f}",
-        f"{total_margin_level:.2f}%",
-        f"{total_office_value:,.2f}",
     ])
     
-    table = Table(data, colWidths=[0.8*inch, 0.8*inch, 1.0*inch, 1.0*inch, 1.0*inch, 1.0*inch, 0.9*inch, 0.9*inch, 0.8*inch])
+    # Calculate available width: A4 width (8.27") - left margin (0.3") - right margin (0.3") = 7.67"
+    # Distribute across 5 columns with more space for numeric columns
+    table = Table(data, colWidths=[1.2*inch, 1.2*inch, 1.5*inch, 1.5*inch, 1.5*inch])
     
     table_style = TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4A4A4A')),
@@ -333,26 +315,26 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
         ('ALIGN', (2, 1), (-1, -1), 'RIGHT'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 9),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
-        ('TOPPADDING', (0, 0), (-1, 0), 6),
+        ('FONTSIZE', (0, 0), (-1, 0), 11),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+        ('TOPPADDING', (0, 0), (-1, 0), 8),
         ('BACKGROUND', (0, 1), (-1, -2), colors.white),
         ('TEXTCOLOR', (0, 1), (-1, -2), colors.black),
         ('FONTNAME', (0, 1), (-1, -2), 'Helvetica'),
-        ('FONTSIZE', (0, 1), (-1, -2), 8),
-        ('TOPPADDING', (0, 1), (-1, -2), 4),
-        ('BOTTOMPADDING', (0, 1), (-1, -2), 4),
-        ('LEFTPADDING', (0, 1), (-1, -2), 8),
-        ('RIGHTPADDING', (0, 1), (-1, -2), 8),
+        ('FONTSIZE', (0, 1), (-1, -2), 10),
+        ('TOPPADDING', (0, 1), (-1, -2), 6),
+        ('BOTTOMPADDING', (0, 1), (-1, -2), 6),
+        ('LEFTPADDING', (0, 1), (-1, -2), 10),
+        ('RIGHTPADDING', (0, 1), (-1, -2), 10),
         ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#F5F5F5')]),
         ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#CCCCCC')),
         ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#E8E8E8')),
         ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, -1), (-1, -1), 9),
-        ('TOPPADDING', (0, -1), (-1, -1), 5),
-        ('BOTTOMPADDING', (0, -1), (-1, -1), 5),
-        ('LEFTPADDING', (0, -1), (-1, -1), 8),
-        ('RIGHTPADDING', (0, -1), (-1, -1), 8),
+        ('FONTSIZE', (0, -1), (-1, -1), 11),
+        ('TOPPADDING', (0, -1), (-1, -1), 7),
+        ('BOTTOMPADDING', (0, -1), (-1, -1), 7),
+        ('LEFTPADDING', (0, -1), (-1, -1), 10),
+        ('RIGHTPADDING', (0, -1), (-1, -1), 10),
         ('ALIGN', (2, -1), (-1, -1), 'RIGHT'),
         ('TEXTCOLOR', (0, -1), (-1, -1), colors.black),
     ])
@@ -374,12 +356,10 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
     total_balance_color = colors.HexColor('#28a745') if total_balance >= 0 else colors.HexColor('#dc3545')
     total_pnl_color = colors.HexColor('#28a745') if total_pnl >= 0 else colors.HexColor('#dc3545')
     total_asset_color = colors.HexColor('#28a745') if total_asset_value >= 0 else colors.HexColor('#dc3545')
-    total_equity_color = colors.HexColor('#28a745') if total_equity >= 0 else colors.HexColor('#dc3545')
     
     table_style.add('TEXTCOLOR', (2, total_row_idx), (2, total_row_idx), total_balance_color)
     table_style.add('TEXTCOLOR', (3, total_row_idx), (3, total_row_idx), total_pnl_color)
     table_style.add('TEXTCOLOR', (4, total_row_idx), (4, total_row_idx), total_asset_color)
-    table_style.add('TEXTCOLOR', (5, total_row_idx), (5, total_row_idx), total_equity_color)
     
     table.setStyle(table_style)
     story.append(table)
