@@ -18,6 +18,7 @@
   {
     "name": "Protrader",
     "token": "8573256279:AAHxBII9pZxTTntMROQ-RjYAvkKttkigAc4",
-    "logo_path": "logo_protrader.jpg"
+    "logo_path": "logo_protrader.jpg",
+    "url": "https://client.500x.exchange/?nologo"
   }
 ]
