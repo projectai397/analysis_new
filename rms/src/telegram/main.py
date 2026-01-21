@@ -16,6 +16,7 @@ import os
 import logging
 import httpx
 from bson import ObjectId
+import schedule
 from telegram import BotCommand
 from telegram import Update
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
@@ -39,6 +40,7 @@ from src.telegram.notification import (
 )
 from .session_store import remember_bot_message_from_message, start_session_timer
 from src.config import config, users, notification, positions ,tele_notification,SUPERADMIN_ROLE_ID, ADMIN_ROLE_ID, MASTER_ROLE_ID
+from .summarize import process_all_documents
 from src.helpers.hierarchy_service import (
     get_admins_for_superadmin,
     get_masters_for_superadmin,
@@ -1316,6 +1318,7 @@ async def _set_bot_commands(app):
     BotCommand("trades", "View trades summary"),
     BotCommand("alerts", "View alerts summary"),
     BotCommand("report", "Generate M2M reports"),
+    BotCommand("summarization", "View WhatsApp chat summaries (Superadmin only)"),
     BotCommand("me", "Who am I / role info"),
     BotCommand("cancel", "Cancel current operation"),
 ]
@@ -1354,6 +1357,7 @@ def build_application(token: str, bot_name: str, logo_path: str, trading_url: st
     from .role_wise_transactions import register_role_wise_transaction_handlers
     from .role_wise_trades import register_role_wise_trade_handlers
     from .report import register_report_handlers
+    from .summarization import register_summarization_handlers
 
     register_user_handlers(app)
     register_position_handlers(app)
@@ -1364,6 +1368,7 @@ def build_application(token: str, bot_name: str, logo_path: str, trading_url: st
     register_role_wise_transaction_handlers(app)
     register_role_wise_trade_handlers(app)
     register_report_handlers(app)
+    register_summarization_handlers(app)
 
     # 4. 🚨 CRITICAL FIX: Pass 'app' to the listener
     # This prevents the "Global 'app' not found" error in your threads.
@@ -1419,11 +1424,46 @@ def run_bot_instance(token: str, bot_name: str, logo_path: str, trading_url: str
     except Exception as e:
         logger.exception(f"Bot '{bot_name}' crashed: {e}")
 
+
+def _daily_summarize_job():
+    """Daily job to summarize WhatsApp messages at 11:45 PM"""
+    try:
+        logger.info("📝 Starting daily summarize job at 11:45 PM")
+        success_count, error_count = process_all_documents()
+        logger.info(
+            f"✔ Daily summarize done → {success_count} successful, {error_count} errors"
+        )
+    except Exception as e:
+        logger.exception(f"✖ Daily summarize crashed: {e}")
+
+
+def _summarize_scheduler_loop():
+    """Background thread that runs the scheduler for daily summarize job"""
+    schedule.every().day.at("16:14").do(_daily_summarize_job)
+    logger.info("📅 Summarize scheduler started - will run daily at 11:45 PM")
+    
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+
+def start_summarize_scheduler():
+    """Start the summarize scheduler in a background thread"""
+    scheduler_thread = threading.Thread(
+        target=_summarize_scheduler_loop,
+        daemon=True
+    )
+    scheduler_thread.start()
+    logger.info("✅ Summarize scheduler thread started")
+
+
 def run_multiple_bots():
     threads = []
 
     json_path = Path(__file__).resolve().parent / "bots.json"
     bots = load_bots_config(str(json_path))
+
+    start_summarize_scheduler()
 
     for b in bots:
         token = b["token"]

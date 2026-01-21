@@ -23,6 +23,8 @@ class Settings:
     ANALYSIS_DB_NAME = os.getenv("ANALYSIS_DB_NAME", "pro_analysis")
     ANALYSIS_COLL = os.getenv("ANALYSIS_COLL", "analysis")
     ANALYSIS_USERS_COLL = os.getenv("ANALYSIS_USERS_COLL", "Users")
+    ANALYSIS_MSG_COLL = os.getenv("MESSAGE", "scrape_msgs")
+    ANALYSIS_SUMMARIZE_COLL = os.getenv("SUMMARIZE", "summarize_msg")
     DATA_COLL = os.getenv("DATA_COLL", "setting")
     TRADE_COLL_ANALYSIS = os.getenv("TRADE_COLL_ANALYSIS", "trade")
     EXCHANGE_COLL = os.getenv("EXCHANGE_COLL", "exchange")
@@ -94,3 +96,5 @@ analysis_users = dst_db[config.ANALYSIS_USERS_COLL]
 data = dst_db[config.DATA_COLL]
 trade = dst_db[config.TRADE_COLL_ANALYSIS]
 notification = dst_db[config.NOTIFICATION]
+messages = dst_db[config.ANALYSIS_MSG_COLL]
+summarize = dst_db[config.ANALYSIS_SUMMARIZE_COLL]
