@@ -65,6 +65,8 @@ function UserView({ token }: { token: string }) {
     isInitiator,
     isRemoteAudioEnabled,
     showIncomingCall,
+    micPermission,
+    speakerPermission,
     startCall,
     acceptCall,
     endCall,
@@ -431,6 +433,8 @@ function UserView({ token }: { token: string }) {
         localAudioRef={localAudioRef}
         remoteAudioRef={remoteAudioRef}
         displayName="Master"
+        micPermission={micPermission}
+        speakerPermission={speakerPermission}
       />
     </main>
   )

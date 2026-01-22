@@ -6,10 +6,31 @@ export type ServerJoinedUser = {
   role: "user"
 }
 
+export type HierarchyAdmin = {
+  id: string
+  name: string
+  userName: string
+  phone?: string
+}
+
+export type HierarchyMaster = {
+  id: string
+  name: string
+  userName: string
+  phone?: string
+}
+
 export type ServerJoinedAdminList = {
   type: "joined"
-  role: "superadmin"
+  role: "superadmin" | "admin"
   needs_selection: true
+  hierarchy?: {
+    type: "superadmin"
+    admins: HierarchyAdmin[]
+  } | {
+    type: "admin"
+    masters: HierarchyMaster[]
+  }
   chatrooms: {
     role: string
     chat_id: string
@@ -17,6 +38,7 @@ export type ServerJoinedAdminList = {
     is_user_active: boolean
     is_superadmin_active: boolean
     updated_time: string
+    room_type?: string
     user?: {
       name: string
       userName: string
@@ -29,6 +51,57 @@ export type ServerSelected = {
   type: "selected"
   chat_id: string
   role: "superadmin"
+}
+
+export type ServerAdminSelected = {
+  type: "admin_selected"
+  admin_id: string
+  chatrooms: {
+    role: string
+    chat_id: string
+    user_id: string
+    is_user_active: boolean
+    is_superadmin_active: boolean
+    updated_time: string
+    room_type?: string
+    user?: {
+      name: string
+      userName: string
+      phone?: string
+    }
+  }[]
+  masters: HierarchyMaster[]
+  pagination?: {
+    total_count: number
+    total_pages: number
+    current_page: number
+    limit: number
+  }
+}
+
+export type ServerMasterSelected = {
+  type: "master_selected"
+  master_id: string
+  chatrooms: {
+    role: string
+    chat_id: string
+    user_id: string
+    is_user_active: boolean
+    is_superadmin_active: boolean
+    updated_time: string
+    room_type?: string
+    user?: {
+      name: string
+      userName: string
+      phone?: string
+    }
+  }[]
+  pagination?: {
+    total_count: number
+    total_pages: number
+    current_page: number
+    limit: number
+  }
 }
 
 export type ServerPong = { type: "pong" }
@@ -134,6 +207,8 @@ export type ServerEvent =
   | ServerJoinedUser
   | ServerJoinedAdminList
   | ServerSelected
+  | ServerAdminSelected
+  | ServerMasterSelected
   | ServerPong
   | ServerTextMessage
   | ServerFileMessage
@@ -150,6 +225,8 @@ export type ServerEvent =
 
 export type ClientPing = { type: "ping" }
 export type ClientSelectRoom = { type: "select_chatroom"; chat_id: string }
+export type ClientSelectAdmin = { type: "select_admin"; admin_id: string }
+export type ClientSelectMaster = { type: "select_master"; master_id: string; admin_id?: string }
 export type ClientSendText = { type: "message"; text: string }
 export type ClientCallStart = { type: "call.start" }
 export type ClientCallAccept = { type: "call.accept"; call_id: string }
@@ -158,7 +235,7 @@ export type ClientCallOffer = { type: "call.offer"; call_id: string; sdp: RTCSes
 export type ClientCallAnswer = { type: "call.answer"; call_id: string; sdp: RTCSessionDescriptionInit }
 export type ClientCallIce = { type: "call.ice"; call_id: string; candidate: RTCIceCandidateInit }
 export type ClientCallEnd = { type: "call.end"; call_id: string }
-export type ClientEvent = ClientPing | ClientSelectRoom | ClientSendText | ClientCallStart | ClientCallAccept | ClientCallReject | ClientCallOffer | ClientCallAnswer | ClientCallIce | ClientCallEnd
+export type ClientEvent = ClientPing | ClientSelectRoom | ClientSelectAdmin | ClientSelectMaster | ClientSendText | ClientCallStart | ClientCallAccept | ClientCallReject | ClientCallOffer | ClientCallAnswer | ClientCallIce | ClientCallEnd
 
 export type ConversationItem =
   | {

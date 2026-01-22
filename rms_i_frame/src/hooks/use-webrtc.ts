@@ -17,6 +17,8 @@ export function useWebRTC({ chatId, role, send }: UseWebRTCOptions) {
   const [isRemoteAudioEnabled, setIsRemoteAudioEnabled] = useState(true)
   const [callId, setCallId] = useState<string | null>(null)
   const [showIncomingCall, setShowIncomingCall] = useState(false)
+  const [micPermission, setMicPermission] = useState<"granted" | "denied" | "prompt" | null>(null)
+  const [speakerPermission, setSpeakerPermission] = useState<"granted" | "denied" | "prompt" | null>(null)
 
   useEffect(() => {
     callIdRef.current = callId
@@ -85,6 +87,41 @@ export function useWebRTC({ chatId, role, send }: UseWebRTCOptions) {
     return pc
   }, [send])
 
+  const requestPermissions = useCallback(async () => {
+    try {
+      if (navigator.permissions && navigator.permissions.query) {
+        try {
+          const micPermission = await navigator.permissions.query({ name: "microphone" as PermissionName })
+          setMicPermission(micPermission.state)
+          
+          micPermission.onchange = () => {
+            setMicPermission(micPermission.state)
+          }
+        } catch (permError) {
+          console.warn("[WebRTC] Permission query not supported")
+        }
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        stream.getTracks().forEach(track => track.stop())
+        setMicPermission("granted")
+      } catch (error: any) {
+        if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
+          setMicPermission("denied")
+        } else {
+          setMicPermission("denied")
+        }
+        throw error
+      }
+
+      setSpeakerPermission("granted")
+    } catch (error) {
+      console.warn("[WebRTC] Permission request failed:", error)
+      throw error
+    }
+  }, [])
+
   const startCall = useCallback(async () => {
     console.log("[WebRTC] startCall called", { chatId, callState, role })
     if (!chatId) {
@@ -95,6 +132,21 @@ export function useWebRTC({ chatId, role, send }: UseWebRTCOptions) {
     if (callState !== "idle") {
       console.warn("[WebRTC] Cannot start call: callState is not idle", { callState })
       return
+    }
+
+    try {
+      await requestPermissions()
+    } catch (error) {
+      const retry = confirm("Microphone permission is required for calls. Would you like to try again?")
+      if (!retry) {
+        return
+      }
+      try {
+        await requestPermissions()
+      } catch (retryError) {
+        alert("Microphone permission is required. Please enable it in your browser settings.")
+        return
+      }
     }
 
     console.log("[WebRTC] Starting call, sending call.start")
@@ -108,7 +160,7 @@ export function useWebRTC({ chatId, role, send }: UseWebRTCOptions) {
       setCallState("idle")
       setIsInitiator(false)
     }
-  }, [chatId, callState, send, role])
+  }, [chatId, callState, send, role, requestPermissions])
 
   const handleCallIncoming = useCallback((incomingCallId: string) => {
     console.log("[WebRTC] handleCallIncoming called", { incomingCallId, role, currentCallId: callId, currentCallState: callState })
@@ -130,6 +182,21 @@ export function useWebRTC({ chatId, role, send }: UseWebRTCOptions) {
       return
     }
 
+    try {
+      await requestPermissions()
+    } catch (error) {
+      const retry = confirm("Microphone permission is required for calls. Would you like to try again?")
+      if (!retry) {
+        return
+      }
+      try {
+        await requestPermissions()
+      } catch (retryError) {
+        alert("Microphone permission is required. Please enable it in your browser settings.")
+        return
+      }
+    }
+
     console.log("[WebRTC] Accepting call, sending call.accept")
     setShowIncomingCall(false)
     setCallState("connecting")
@@ -139,7 +206,7 @@ export function useWebRTC({ chatId, role, send }: UseWebRTCOptions) {
       call_id: callId,
     })
     console.log("[WebRTC] call.accept sent")
-  }, [callId, send, role])
+  }, [callId, send, role, requestPermissions])
 
   const handleCallAccepted = useCallback(async () => {
     if (!callId) return
@@ -392,6 +459,8 @@ export function useWebRTC({ chatId, role, send }: UseWebRTCOptions) {
     isRemoteAudioEnabled,
     callId,
     showIncomingCall,
+    micPermission,
+    speakerPermission,
     startCall,
     acceptCall,
     endCall,

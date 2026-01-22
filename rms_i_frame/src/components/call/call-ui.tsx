@@ -18,6 +18,8 @@ type CallUIProps = {
   localAudioRef: React.RefObject<HTMLAudioElement | null>
   remoteAudioRef: React.RefObject<HTMLAudioElement | null>
   displayName?: string
+  micPermission?: "granted" | "denied" | "prompt" | null
+  speakerPermission?: "granted" | "denied" | "prompt" | null
 }
 
 export function CallUI({
@@ -32,6 +34,8 @@ export function CallUI({
   localAudioRef,
   remoteAudioRef,
   displayName = "Master",
+  micPermission,
+  speakerPermission,
 }: CallUIProps) {
   const isMuted = localAudioRef.current?.srcObject
     ? !(localAudioRef.current.srcObject as MediaStream).getAudioTracks()[0]?.enabled
@@ -94,42 +98,63 @@ export function CallUI({
               <p className="text-[#8696a0]">Call in progress</p>
             </div>
 
-            <div className="flex items-center justify-center gap-4">
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={onToggleMute}
-                className="w-14 h-14 rounded-full bg-[#2a3942] hover:bg-[#313d45] text-white"
-                aria-label={isMuted ? "Unmute" : "Mute"}
-              >
-                {isMuted ? (
-                  <MicOff className="w-6 h-6" />
-                ) : (
-                  <Mic className="w-6 h-6" />
-                )}
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={onToggleRemoteAudio}
-                className="w-14 h-14 rounded-full bg-[#2a3942] hover:bg-[#313d45] text-white"
-                aria-label={isRemoteAudioEnabled ? "Mute remote" : "Unmute remote"}
-              >
-                {isRemoteAudioEnabled ? (
-                  <Volume2 className="w-6 h-6" />
-                ) : (
-                  <VolumeX className="w-6 h-6" />
-                )}
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={onEndCall}
-                className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-700 text-white"
-                aria-label="End call"
-              >
-                <PhoneOff className="w-6 h-6" />
-              </Button>
+            <div className="flex flex-col items-center gap-4">
+              {(micPermission === "denied" || speakerPermission === "denied") && (
+                <div className="bg-yellow-500/20 border border-yellow-500/50 rounded-lg px-4 py-2 text-yellow-200 text-sm">
+                  {micPermission === "denied" && "Microphone permission required"}
+                  {micPermission === "denied" && speakerPermission === "denied" && " • "}
+                  {speakerPermission === "denied" && "Speaker permission required"}
+                </div>
+              )}
+              <div className="flex items-center justify-center gap-4">
+                <div className="relative">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={onToggleMute}
+                    className={`w-14 h-14 rounded-full bg-[#2a3942] hover:bg-[#313d45] text-white ${micPermission === "denied" ? "opacity-50 cursor-not-allowed" : ""}`}
+                    aria-label={isMuted ? "Unmute" : "Mute"}
+                    disabled={micPermission === "denied"}
+                  >
+                    {isMuted ? (
+                      <MicOff className="w-6 h-6" />
+                    ) : (
+                      <Mic className="w-6 h-6" />
+                    )}
+                  </Button>
+                  {micPermission === "granted" && (
+                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-[#111b21]"></div>
+                  )}
+                </div>
+                <div className="relative">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={onToggleRemoteAudio}
+                    className={`w-14 h-14 rounded-full bg-[#2a3942] hover:bg-[#313d45] text-white ${speakerPermission === "denied" ? "opacity-50 cursor-not-allowed" : ""}`}
+                    aria-label={isRemoteAudioEnabled ? "Mute remote" : "Unmute remote"}
+                    disabled={speakerPermission === "denied"}
+                  >
+                    {isRemoteAudioEnabled ? (
+                      <Volume2 className="w-6 h-6" />
+                    ) : (
+                      <VolumeX className="w-6 h-6" />
+                    )}
+                  </Button>
+                  {speakerPermission === "granted" && (
+                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-[#111b21]"></div>
+                  )}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={onEndCall}
+                  className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-700 text-white"
+                  aria-label="End call"
+                >
+                  <PhoneOff className="w-6 h-6" />
+                </Button>
+              </div>
             </div>
           </div>
         </div>

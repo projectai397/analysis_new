@@ -9,6 +9,8 @@ import type {
   ServerJoinedUser,
   ServerJoinedAdminList,
   ServerSelected,
+  ServerAdminSelected,
+  ServerMasterSelected,
   ServerTextMessage,
   ServerFileMessage,
   ServerAudioMessage,
@@ -20,6 +22,8 @@ import type {
   ServerCallIce,
   ServerCallEnded,
   ServerCallError,
+  HierarchyAdmin,
+  HierarchyMaster,
 } from "./types"
 
 const DEFAULT_WS = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:8013/ws"
@@ -34,6 +38,11 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
   const [chatId, setChatId] = useState<string | null>(null)
   const [needsSelection, setNeedsSelection] = useState(false)
   const [chatrooms, setChatrooms] = useState<ServerJoinedAdminList["chatrooms"]>([])
+  const [hierarchy, setHierarchy] = useState<{ type: "superadmin"; admins: HierarchyAdmin[] } | { type: "admin"; masters: HierarchyMaster[] } | null>(null)
+  const [selectedAdminId, setSelectedAdminId] = useState<string | null>(null)
+  const [selectedMasterId, setSelectedMasterId] = useState<string | null>(null)
+  const [masters, setMasters] = useState<HierarchyMaster[]>([])
+  const [initialPersonalChatrooms, setInitialPersonalChatrooms] = useState<ServerJoinedAdminList["chatrooms"]>([])
   const [messages, setMessages] = useState<ConversationItem[]>([])
   const [callEvent, setCallEvent] = useState<ServerCallIncoming | ServerCallRinging | ServerCallAccepted | ServerCallOffer | ServerCallAnswer | ServerCallIce | ServerCallEnded | ServerCallError | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -89,20 +98,53 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
             setNeedsSelection(false)
           } else {
             const j = data as ServerJoinedAdminList
-            console.log("[WS] Admin/Master joined, needs_selection:", j.needs_selection, "chatrooms:", j.chatrooms.length)
+            console.log("[WS] Admin/Master joined, needs_selection:", j.needs_selection, "chatrooms:", j.chatrooms.length, "hierarchy:", j.hierarchy)
             if (j.needs_selection) {
               setNeedsSelection(true)
-              setChatrooms(
-                [...j.chatrooms].sort(
-                  (a, b) => new Date(b.updated_time).getTime() - new Date(a.updated_time).getTime(),
-                ),
+              const sortedChatrooms = [...j.chatrooms].sort(
+                (a, b) => new Date(b.updated_time).getTime() - new Date(a.updated_time).getTime(),
               )
+              setChatrooms(sortedChatrooms)
+              const personalChats = sortedChatrooms.filter(c => c.room_type === "staff_bot")
+              setInitialPersonalChatrooms(personalChats)
+              if (j.hierarchy) {
+                setHierarchy(j.hierarchy)
+              }
             }
           }
         } else if (data.type === "selected") {
           const s = data as ServerSelected
           setChatId(s.chat_id)
           setNeedsSelection(false)
+        } else if (data.type === "admin_selected") {
+          const s = data as ServerAdminSelected
+          console.log("[WS] Admin selected:", s.admin_id, "masters:", s.masters.length, "chatrooms:", s.chatrooms.length)
+          setSelectedAdminId(s.admin_id)
+          setMasters(s.masters)
+          const sortedChatrooms = [...s.chatrooms].sort(
+            (a, b) => new Date(b.updated_time).getTime() - new Date(a.updated_time).getTime(),
+          )
+          const personalChats = sortedChatrooms.filter(c => c.room_type === "staff_bot")
+          if (personalChats.length === 0) {
+            const adminPersonalChats = initialPersonalChatrooms.filter(c => {
+              const adminIdFromChat = (c as any).admin_id || (c as any).user_id
+              return adminIdFromChat === s.admin_id
+            })
+            setChatrooms([...sortedChatrooms, ...adminPersonalChats])
+          } else {
+            setChatrooms(sortedChatrooms)
+          }
+          setNeedsSelection(true)
+        } else if (data.type === "master_selected") {
+          const s = data as ServerMasterSelected
+          console.log("[WS] Master selected:", s.master_id, "chatrooms:", s.chatrooms.length)
+          setSelectedMasterId(s.master_id)
+          setChatrooms(
+            [...s.chatrooms].sort(
+              (a, b) => new Date(b.updated_time).getTime() - new Date(a.updated_time).getTime(),
+            ),
+          )
+          setNeedsSelection(true)
         } else if (data.type === "message") {
           const m = data as ServerTextMessage | ServerFileMessage | ServerAudioMessage
           setMessages((prev) => {
@@ -239,17 +281,48 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
     [send],
   )
 
+  const selectAdmin = useCallback(
+    (adminId: string) => {
+      send({ type: "select_admin", admin_id: adminId })
+      setSelectedAdminId(adminId)
+      setSelectedMasterId(null)
+      setMasters([])
+    },
+    [send],
+  )
+
+  const selectMaster = useCallback(
+    (masterId: string, adminId?: string) => {
+      send({ type: "select_master", master_id: masterId, admin_id: adminId })
+      setSelectedMasterId(masterId)
+    },
+    [send],
+  )
+
   const resetLiveMessages = useCallback(() => setMessages([]), [])
   const clearCallEvent = useCallback(() => setCallEvent(null), [])
+  const resetHierarchy = useCallback(() => {
+    setSelectedAdminId(null)
+    setSelectedMasterId(null)
+    setMasters([])
+  }, [])
 
   return {
     status,
     chatId,
     needsSelection,
     chatrooms,
+    hierarchy,
+    selectedAdminId,
+    selectedMasterId,
+    masters,
+    initialPersonalChatrooms,
     messages,
     sendText,
     selectRoom,
+    selectAdmin,
+    selectMaster,
+    resetHierarchy,
     resetLiveMessages,
     send,
     callEvent,

@@ -102,11 +102,22 @@ function AdminPageInner() {
 }
 
 function AdminView({ token }: { token: string }) {
+    const session = decodeJWT(token);
+    const superadminId = session?._id as string | undefined;
+    
     const {
         status,
         chatId,
         chatrooms,
+        hierarchy,
+        selectedAdminId,
+        selectedMasterId,
+        masters,
+        initialPersonalChatrooms,
         selectRoom,
+        selectAdmin,
+        selectMaster,
+        resetHierarchy,
         messages,
         resetLiveMessages,
         sendText,
@@ -125,14 +136,20 @@ function AdminView({ token }: { token: string }) {
     );
 
     const [showChatView, setShowChatView] = useState(false);
-    const [isSearchOpen, setIsSearchOpen] = useState(false);
-    const [searchQuery, setSearchQuery] = useState("");
+    const [isSidebarSearchOpen, setIsSidebarSearchOpen] = useState(false);
+    const [sidebarSearchQuery, setSidebarSearchQuery] = useState("");
+    const [isChatSearchOpen, setIsChatSearchOpen] = useState(false);
+    const [chatSearchQuery, setChatSearchQuery] = useState("");
+    const [expandedAdmins, setExpandedAdmins] = useState<Set<string>>(new Set());
+    const [expandedMasters, setExpandedMasters] = useState<Set<string>>(new Set());
 
     const {
         callState,
         isInitiator,
         isRemoteAudioEnabled,
         showIncomingCall,
+        micPermission,
+        speakerPermission,
         startCall,
         acceptCall,
         endCall,
@@ -201,10 +218,96 @@ function AdminView({ token }: { token: string }) {
         }
     }, [callEvent, handleCallIncoming, handleCallRinging, handleCallAccepted, handleCallOffer, handleCallAnswer, handleIceCandidate, endCall, clearCallEvent]);
 
+    const getPersonalChatrooms = (chatroomsList: typeof chatrooms) => chatroomsList.filter(c => c.room_type === "staff_bot");
+    const getRegularChatrooms = (chatroomsList: typeof chatrooms) => chatroomsList.filter(c => c.room_type !== "staff_bot");
+
+    const filterBySearch = (items: any[], searchTerm: string) => {
+        if (!searchTerm.trim()) return items;
+        const query = searchTerm.toLowerCase().trim();
+        return items.filter(item => {
+            const name = (item.name || item.userName || "").toLowerCase();
+            const userName = (item.userName || "").toLowerCase();
+            const user = item.user || {};
+            const userName2 = (user.name || user.userName || "").toLowerCase();
+            return name.includes(query) || userName.includes(query) || userName2.includes(query);
+        });
+    };
+
+    const getAllMatchingClients = (searchTerm: string) => {
+        if (!searchTerm.trim()) return [];
+        return filterBySearch(getRegularChatrooms(chatrooms), searchTerm);
+    };
+
+    const adminsToShow = useMemo(() => {
+        if (!sidebarSearchQuery.trim() || !hierarchy || hierarchy.type !== "superadmin") {
+            return hierarchy?.type === "superadmin" ? hierarchy.admins : [];
+        }
+        
+        const allMatchingClients = getAllMatchingClients(sidebarSearchQuery);
+        const adminsToShowSet = new Set<string>();
+        
+        hierarchy.admins.forEach(admin => {
+            const adminMatches = filterBySearch([admin], sidebarSearchQuery).length > 0;
+            const adminPersonalChats = initialPersonalChatrooms.filter(c => 
+                (c.user_id === admin.id || (c as any).admin_id === admin.id) &&
+                filterBySearch([c], sidebarSearchQuery).length > 0
+            );
+            
+            if (adminMatches || adminPersonalChats.length > 0) {
+                adminsToShowSet.add(admin.id);
+            } else if (selectedAdminId === admin.id && masters.length > 0) {
+                const matchingMasters = filterBySearch(masters, sidebarSearchQuery);
+                const adminMasters = masters.filter(m => {
+                    const masterMatches = filterBySearch([m], sidebarSearchQuery).length > 0;
+                    const masterClients = allMatchingClients.filter(c => c.user_id === m.id);
+                    return masterMatches || masterClients.length > 0;
+                });
+                
+                if (matchingMasters.length > 0 || adminMasters.length > 0) {
+                    adminsToShowSet.add(admin.id);
+                }
+            }
+        });
+        
+        return hierarchy.admins.filter(admin => adminsToShowSet.has(admin.id));
+    }, [sidebarSearchQuery, hierarchy, initialPersonalChatrooms, selectedAdminId, masters, chatrooms]);
+
     useEffect(() => {
         resetLiveMessages();
         setShowChatView(false);
     }, [chatId, resetLiveMessages]);
+
+    useEffect(() => {
+        if (sidebarSearchQuery.trim().length > 0 && hierarchy?.type === "superadmin") {
+            adminsToShow.forEach(admin => {
+                if (!expandedAdmins.has(admin.id) || selectedAdminId !== admin.id) {
+                    selectAdmin(admin.id);
+                    setExpandedAdmins(prev => new Set(prev).add(admin.id));
+                }
+            });
+            
+            if (masters.length > 0) {
+                const allMatchingClients = getAllMatchingClients(sidebarSearchQuery);
+                masters.forEach(master => {
+                    const masterMatches = filterBySearch([master], sidebarSearchQuery).length > 0;
+                    const masterClients = allMatchingClients.filter(c => c.user_id === master.id);
+                    if ((masterMatches || masterClients.length > 0) && !expandedMasters.has(master.id)) {
+                        setExpandedMasters(prev => new Set(prev).add(master.id));
+                        if (!selectedMasterId || selectedMasterId !== master.id) {
+                            const adminId = hierarchy.admins.find(a => expandedAdmins.has(a.id))?.id;
+                            if (adminId) {
+                                selectMaster(master.id, adminId);
+                            }
+                        }
+                    }
+                });
+            }
+        } else if (sidebarSearchQuery.trim().length === 0) {
+            if (selectedAdminId && !expandedAdmins.has(selectedAdminId)) {
+                resetHierarchy();
+            }
+        }
+    }, [sidebarSearchQuery, hierarchy, adminsToShow, selectedAdminId, expandedAdmins, expandedMasters, masters, selectAdmin, selectMaster, resetHierarchy]);
 
     useEffect(() => {
         if (chatId) {
@@ -286,6 +389,38 @@ function AdminView({ token }: { token: string }) {
         setShowChatView(false);
     };
 
+    const toggleAdmin = (adminId: string) => {
+        if (expandedAdmins.has(adminId)) {
+            setExpandedAdmins(prev => {
+                const next = new Set(prev);
+                next.delete(adminId);
+                return next;
+            });
+            setExpandedMasters(new Set());
+            if (selectedAdminId === adminId) {
+                resetHierarchy();
+            }
+        } else {
+            setExpandedAdmins(prev => new Set(prev).add(adminId));
+            selectAdmin(adminId);
+        }
+        setShowChatView(false);
+    };
+
+    const toggleMaster = (masterId: string, adminId?: string) => {
+        if (expandedMasters.has(masterId)) {
+            setExpandedMasters(prev => {
+                const next = new Set(prev);
+                next.delete(masterId);
+                return next;
+            });
+        } else {
+            setExpandedMasters(prev => new Set(prev).add(masterId));
+            selectMaster(masterId, adminId);
+        }
+        setShowChatView(false);
+    };
+
     return (
         <main className="h-[100dvh] w-full max-w-full mx-auto flex flex-col bg-[#e5ddd5] dark:bg-[#0b141a]">
             <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -294,65 +429,531 @@ function AdminView({ token }: { token: string }) {
                         }`}
                 >
                     <header
-                        className="bg-[#008069] dark:bg-[#202c33] px-4 py-3 flex items-center shadow-sm flex-shrink-0"
+                        className="bg-[#008069] dark:bg-[#202c33] px-4 py-3 flex items-center gap-2 shadow-sm flex-shrink-0"
                         role="banner"
                     >
-                        <h1 className="text-lg font-semibold text-[#ffffff] dark:text-[#e9edef]">
-                            Chats
+                        <h1 className="text-lg font-semibold text-[#ffffff] dark:text-[#e9edef] flex-1">
+                            Chat
                         </h1>
+                        {isSidebarSearchOpen ? (
+                            <div className="flex items-center gap-2 bg-[#008069]/20 dark:bg-[#2a3942]/50 rounded-lg px-2 py-1 flex-1 max-w-[200px]">
+                                <svg
+                                    width="16"
+                                    height="16"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    className="text-[#ffffff] dark:text-[#8696a0] flex-shrink-0"
+                                    aria-hidden="true"
+                                >
+                                    <path
+                                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                    />
+                                </svg>
+                                <input
+                                    type="text"
+                                    value={sidebarSearchQuery}
+                                    onChange={(e) => setSidebarSearchQuery(e.target.value)}
+                                    placeholder="Search..."
+                                    className="bg-transparent border-none outline-none text-[#ffffff] dark:text-[#e9edef] text-sm placeholder:text-[#ffffff]/60 dark:placeholder:text-[#8696a0] flex-1 min-w-0"
+                                    autoFocus
+                                    onKeyDown={(e) => {
+                                        if (e.key === "Escape") {
+                                            setIsSidebarSearchOpen(false);
+                                            setSidebarSearchQuery("");
+                                        }
+                                    }}
+                                />
+                                <button
+                                    onClick={() => {
+                                        setIsSidebarSearchOpen(false);
+                                        setSidebarSearchQuery("");
+                                    }}
+                                    className="text-[#ffffff] dark:text-[#8696a0] hover:opacity-80 p-1"
+                                    aria-label="Close search"
+                                >
+                                    <svg
+                                        width="16"
+                                        height="16"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        aria-hidden="true"
+                                    >
+                                        <path
+                                            d="M18 6L6 18M6 6l12 12"
+                                            stroke="currentColor"
+                                            strokeWidth="2"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                        />
+                                    </svg>
+                                </button>
+                            </div>
+                        ) : (
+                            <button
+                                onClick={() => setIsSidebarSearchOpen(true)}
+                                className="p-1.5 text-[#ffffff] dark:text-[#8696a0] hover:bg-[#008069]/80 dark:hover:bg-[#313d45] rounded-full transition-colors"
+                                aria-label="Search"
+                                title="Search"
+                            >
+                                <svg
+                                    width="20"
+                                    height="20"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    aria-hidden="true"
+                                >
+                                    <path
+                                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                    />
+                                </svg>
+                            </button>
+                        )}
                     </header>
 
                     <div className="flex-1 overflow-y-auto">
-                        {!chatrooms.length ? (
-                            <div className="p-4 text-center text-sm text-[#667781] dark:text-[#8696a0]">
-                                No chats available
+                        {hierarchy ? (
+                            <div className="flex flex-col">
+                                {hierarchy.type === "superadmin" && (
+                                    <>
+                                        {initialPersonalChatrooms.filter(c => 
+                                            superadminId && (c.user_id === superadminId || (c as any).user_id?.toString() === superadminId)
+                                        ).length > 0 && (
+                                            <>
+                                                {initialPersonalChatrooms.filter(c => 
+                                                    superadminId && (c.user_id === superadminId || (c as any).user_id?.toString() === superadminId)
+                                                ).map((r) => {
+                                                    const isChatSelected = chatId === r.chat_id;
+                                                    return (
+                                                        <button
+                                                            key={r.chat_id}
+                                                            onClick={() => handleChatSelect(r.chat_id)}
+                                                            className={`w-full flex items-center gap-2 px-4 py-2.5 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${isChatSelected ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""
+                                                                }`}
+                                                        >
+                                                            <div className="w-4 flex-shrink-0"></div>
+                                                            <div className="relative flex-shrink-0">
+                                                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-700 to-green-500 dark:from-green-800 dark:to-green-600 flex items-center justify-center text-white font-medium">
+                                                                    💬
+                                                                </div>
+                                                            </div>
+                                                            <div className="flex-1 min-w-0 text-left">
+                                                                <div className="flex items-center justify-between">
+                                                                    <h3 className="text-sm font-medium text-[#111b21] dark:text-[#e9edef] truncate">
+                                                                        Personal Chat
+                                                                    </h3>
+                                                                    <span className="text-xs text-[#667781] dark:text-[#8696a0] flex-shrink-0 ml-2">
+                                                                        {formatChatTime(r.updated_time)}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                        </button>
+                                                    );
+                                                })}
+                                            </>
+                                        )}
+                                        {adminsToShow.length === 0 ? (
+                                            <div className="p-4 text-center text-sm text-[#667781] dark:text-[#8696a0]">
+                                                {sidebarSearchQuery ? "No users found" : "No admins available"}
+                                            </div>
+                                        ) : (
+                                            adminsToShow.map((admin) => {
+                                                const isSearching = sidebarSearchQuery.trim().length > 0;
+                                                const isExpanded = expandedAdmins.has(admin.id) || isSearching;
+                                                const isSelected = selectedAdminId === admin.id || isSearching;
+                                                const initials = getInitials(admin.name || admin.userName);
+                                                
+                                                const allMatchingClients = getAllMatchingClients(sidebarSearchQuery);
+                                                const adminMasters = isSelected ? masters.filter(m => {
+                                                    const masterMatches = filterBySearch([m], sidebarSearchQuery).length > 0;
+                                                    const masterClients = allMatchingClients.filter(c => c.user_id === m.id);
+                                                    return isSearching ? (masterMatches || masterClients.length > 0) : true;
+                                                }) : [];
+                                                
+                                                const adminPersonalChats = isSelected ? filterBySearch(chatrooms.filter(c => 
+                                                    c.room_type === "staff_bot" && (c.user_id === admin.id || (c as any).admin_id === admin.id)
+                                                ), sidebarSearchQuery) : [];
+                                                
+                                                const hasMatchingContent = adminMasters.length > 0 || adminPersonalChats.length > 0;
+                                                const shouldShowExpanded = (isExpanded && isSelected) || (isSearching && hasMatchingContent);
+
+                                                return (
+                                                    <div key={admin.id} className="flex flex-col">
+                                                        <button
+                                                            onClick={() => toggleAdmin(admin.id)}
+                                                            className={`w-full flex items-center gap-2 px-4 py-2.5 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${isSelected ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""
+                                                                }`}
+                                                        >
+                                                            <svg
+                                                                width="12"
+                                                                height="12"
+                                                                viewBox="0 0 24 24"
+                                                                fill="none"
+                                                                xmlns="http://www.w3.org/2000/svg"
+                                                                className={`text-[#667781] dark:text-[#8696a0] flex-shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`}
+                                                            >
+                                                                <path
+                                                                    d="M9 18l6-6-6-6"
+                                                                    stroke="currentColor"
+                                                                    strokeWidth="2"
+                                                                    strokeLinecap="round"
+                                                                    strokeLinejoin="round"
+                                                                />
+                                                            </svg>
+                                                            <div className="relative flex-shrink-0">
+                                                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-800 to-green-900 dark:from-green-900 dark:to-green-950 flex items-center justify-center text-white font-medium text-sm">
+                                                                    {initials}
+                                                                </div>
+                                                            </div>
+                                                            <div className="flex-1 min-w-0 text-left">
+                                                                <h3 className="text-sm font-medium text-[#111b21] dark:text-[#e9edef] truncate">
+                                                                    {admin.name || admin.userName || "Unknown"}
+                                                                </h3>
+                                                                <p className="text-xs text-green-800 dark:text-green-600 truncate">
+                                                                    {admin.userName ? `@${admin.userName}` : "Admin"}
+                                                                </p>
+                                                            </div>
+                                                        </button>
+                                                        {shouldShowExpanded && (
+                                                            <div className="flex flex-col">
+                                                                {adminPersonalChats.length > 0 && (
+                                                                    <>
+                                                                        {adminPersonalChats.map((r) => {
+                                                                            const isChatSelected = chatId === r.chat_id;
+                                                                            return (
+                                                                                <button
+                                                                                    key={r.chat_id}
+                                                                                    onClick={() => handleChatSelect(r.chat_id)}
+                                                                                    className={`w-full flex items-center gap-2 px-4 py-2.5 pl-8 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${isChatSelected ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""
+                                                                                        }`}
+                                                                                >
+                                                                                    <div className="w-3 flex-shrink-0"></div>
+                                                                                    <div className="relative flex-shrink-0">
+                                                                                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-purple-500 to-purple-600 dark:from-purple-600 dark:to-purple-700 flex items-center justify-center text-white font-medium text-xs">
+                                                                                            💬
+                                                                                        </div>
+                                                                                    </div>
+                                                                                    <div className="flex-1 min-w-0 text-left">
+                                                                                        <div className="flex items-center justify-between">
+                                                                                            <h3 className="text-xs font-medium text-[#111b21] dark:text-[#e9edef] truncate">
+                                                                                                Personal Chat
+                                                                                            </h3>
+                                                                                            <span className="text-xs text-[#667781] dark:text-[#8696a0] flex-shrink-0 ml-2">
+                                                                                                {formatChatTime(r.updated_time)}
+                                                                                            </span>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                </button>
+                                                                            );
+                                                                        })}
+                                                                    </>
+                                                                )}
+                                                                {adminMasters.length > 0 && (
+                                                                    <>
+                                                                {adminMasters.map((master) => {
+                                                                    const isSearching = sidebarSearchQuery.trim().length > 0;
+                                                                    const isMasterExpanded = expandedMasters.has(master.id) || isSearching;
+                                                                    const isMasterSelected = selectedMasterId === master.id || isSearching;
+                                                                    const masterInitials = getInitials(master.name || master.userName);
+                                                                    const allMatchingClients = getAllMatchingClients(sidebarSearchQuery);
+                                                                    const masterChatrooms = isMasterSelected 
+                                                                        ? filterBySearch(getRegularChatrooms(chatrooms), sidebarSearchQuery)
+                                                                        : (isMasterExpanded || isSearching) 
+                                                                            ? allMatchingClients.filter(c => c.user_id === master.id) 
+                                                                            : [];
+                                                                    const shouldShowMasterExpanded = isMasterExpanded && (isMasterSelected || masterChatrooms.length > 0 || isSearching);
+
+                                                                    return (
+                                                                        <div key={master.id} className="flex flex-col">
+                                                                            <button
+                                                                                onClick={() => toggleMaster(master.id, admin.id)}
+                                                                                className={`w-full flex items-center gap-2 px-4 py-2.5 pl-8 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${isMasterSelected ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""
+                                                                                    }`}
+                                                                            >
+                                                                                <svg
+                                                                                    width="12"
+                                                                                    height="12"
+                                                                                    viewBox="0 0 24 24"
+                                                                                    fill="none"
+                                                                                    xmlns="http://www.w3.org/2000/svg"
+                                                                                    className={`text-[#667781] dark:text-[#8696a0] flex-shrink-0 transition-transform ${isMasterExpanded ? "rotate-90" : ""}`}
+                                                                                >
+                                                                                    <path
+                                                                                        d="M9 18l6-6-6-6"
+                                                                                        stroke="currentColor"
+                                                                                        strokeWidth="2"
+                                                                                        strokeLinecap="round"
+                                                                                        strokeLinejoin="round"
+                                                                                    />
+                                                                                </svg>
+                                                                                <div className="relative flex-shrink-0">
+                                                                                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-green-600 to-green-700 dark:from-green-700 dark:to-green-800 flex items-center justify-center text-white font-medium text-xs">
+                                                                                        {masterInitials}
+                                                                                    </div>
+                                                                                </div>
+                                                                                <div className="flex-1 min-w-0 text-left">
+                                                                                    <h3 className="text-sm font-medium text-[#111b21] dark:text-[#e9edef] truncate">
+                                                                                        {master.name || master.userName || "Unknown"}
+                                                                                    </h3>
+                                                                                    <p className="text-xs text-green-600 dark:text-green-500 truncate">
+                                                                                        {master.userName ? `@${master.userName}` : "Master"}
+                                                                                    </p>
+                                                                                </div>
+                                                                            </button>
+                                                                            {shouldShowMasterExpanded && (
+                                                                                <div className="flex flex-col">
+                                                                                    {masterChatrooms.map((r) => {
+                                                                                        const isChatSelected = chatId === r.chat_id;
+                                                                                        const name = r.user?.name || r.user?.userName || "Unknown";
+                                                                                        const chatInitials = getInitials(name);
+
+                                                                                        return (
+                                                                                            <button
+                                                                                                key={r.chat_id}
+                                                                                                onClick={() => handleChatSelect(r.chat_id)}
+                                                                                                className={`w-full flex items-center gap-2 px-4 py-2.5 pl-12 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${isChatSelected ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""
+                                                                                                    }`}
+                                                                                            >
+                                                                                                <div className="w-3 flex-shrink-0"></div>
+                                                                                                <div className="relative flex-shrink-0">
+                                                                                                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-green-300 to-green-400 dark:from-green-400 dark:to-green-500 flex items-center justify-center text-white font-medium text-xs">
+                                                                                                        {chatInitials}
+                                                                                                    </div>
+                                                                                                    {r.is_user_active && (
+                                                                                                        <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-[#53bdeb] border-2 border-white dark:border-[#111b21] rounded-full"></div>
+                                                                                                    )}
+                                                                                                </div>
+                                                                                                <div className="flex-1 min-w-0 text-left">
+                                                                                                    <div className="flex items-center justify-between">
+                                                                                                        <h3 className="text-xs font-medium text-[#111b21] dark:text-[#e9edef] truncate">
+                                                                                                            {name}
+                                                                                                        </h3>
+                                                                                                        <span className="text-xs text-[#667781] dark:text-[#8696a0] flex-shrink-0 ml-2">
+                                                                                                            {formatChatTime(r.updated_time)}
+                                                                                                        </span>
+                                                                                                    </div>
+                                                                                                    <p className="text-xs text-[#667781] dark:text-[#8696a0] truncate">
+                                                                                                        {r.user?.userName ? `@${r.user.userName}` : "Client"}
+                                                                                                    </p>
+                                                                                                </div>
+                                                                                            </button>
+                                                                                        );
+                                                                                    })}
+                                                                                </div>
+                                                                            )}
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                                    </>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })
+                                        )}
+                                    </>
+                                )}
+                                {hierarchy.type === "admin" && (
+                                    <>
+                                        {getPersonalChatrooms(chatrooms).length > 0 && (
+                                            <>
+                                                {getPersonalChatrooms(chatrooms).map((r) => {
+                                                    const isChatSelected = chatId === r.chat_id;
+                                                    return (
+                                                        <button
+                                                            key={r.chat_id}
+                                                            onClick={() => handleChatSelect(r.chat_id)}
+                                                            className={`w-full flex items-center gap-2 px-4 py-2.5 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${isChatSelected ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""
+                                                                }`}
+                                                        >
+                                                            <div className="w-4 flex-shrink-0"></div>
+                                                            <div className="relative flex-shrink-0">
+                                                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-purple-600 dark:from-purple-600 dark:to-purple-700 flex items-center justify-center text-white font-medium">
+                                                                    💬
+                                                                </div>
+                                                            </div>
+                                                            <div className="flex-1 min-w-0 text-left">
+                                                                <div className="flex items-center justify-between">
+                                                                    <h3 className="text-sm font-medium text-[#111b21] dark:text-[#e9edef] truncate">
+                                                                        Personal Chat
+                                                                    </h3>
+                                                                    <span className="text-xs text-[#667781] dark:text-[#8696a0] flex-shrink-0 ml-2">
+                                                                        {formatChatTime(r.updated_time)}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                        </button>
+                                                    );
+                                                })}
+                                            </>
+                                        )}
+                                        {filterBySearch(hierarchy.masters, sidebarSearchQuery).length === 0 ? (
+                                            <div className="p-4 text-center text-sm text-[#667781] dark:text-[#8696a0]">
+                                                {sidebarSearchQuery ? "No masters found" : "No masters available"}
+                                            </div>
+                                        ) : (
+                                            filterBySearch(hierarchy.masters, sidebarSearchQuery).map((master) => {
+                                                const isSearching = sidebarSearchQuery.trim().length > 0;
+                                                const isExpanded = expandedMasters.has(master.id) || isSearching;
+                                                const isSelected = selectedMasterId === master.id || isSearching;
+                                                const initials = getInitials(master.name || master.userName);
+                                                const masterChatrooms = isSelected 
+                                                    ? filterBySearch(getRegularChatrooms(chatrooms), sidebarSearchQuery)
+                                                    : (isExpanded || isSearching) 
+                                                        ? filterBySearch(getRegularChatrooms(chatrooms), sidebarSearchQuery).filter(c => c.user_id === master.id)
+                                                        : [];
+                                                const shouldShowExpanded = isExpanded && (isSelected || masterChatrooms.length > 0 || isSearching);
+
+                                                return (
+                                                    <div key={master.id} className="flex flex-col">
+                                                        <button
+                                                            onClick={() => toggleMaster(master.id)}
+                                                            className={`w-full flex items-center gap-2 px-4 py-2.5 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${isSelected ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""
+                                                                }`}
+                                                        >
+                                                            <svg
+                                                                width="12"
+                                                                height="12"
+                                                                viewBox="0 0 24 24"
+                                                                fill="none"
+                                                                xmlns="http://www.w3.org/2000/svg"
+                                                                className={`text-[#667781] dark:text-[#8696a0] flex-shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`}
+                                                            >
+                                                                <path
+                                                                    d="M9 18l6-6-6-6"
+                                                                    stroke="currentColor"
+                                                                    strokeWidth="2"
+                                                                    strokeLinecap="round"
+                                                                    strokeLinejoin="round"
+                                                                />
+                                                            </svg>
+                                                            <div className="relative flex-shrink-0">
+                                                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-600 to-green-700 dark:from-green-700 dark:to-green-800 flex items-center justify-center text-white font-medium text-sm">
+                                                                    {initials}
+                                                                </div>
+                                                            </div>
+                                                            <div className="flex-1 min-w-0 text-left">
+                                                                <h3 className="text-sm font-medium text-[#111b21] dark:text-[#e9edef] truncate">
+                                                                    {master.name || master.userName || "Unknown"}
+                                                                </h3>
+                                                                <p className="text-xs text-green-600 dark:text-green-500 truncate">
+                                                                    {master.userName ? `@${master.userName}` : "Master"}
+                                                                </p>
+                                                            </div>
+                                                        </button>
+                                                        {shouldShowExpanded && (
+                                                            <div className="flex flex-col">
+                                                                {masterChatrooms.map((r) => {
+                                                                    const isChatSelected = chatId === r.chat_id;
+                                                                    const name = r.user?.name || r.user?.userName || "Unknown";
+                                                                    const chatInitials = getInitials(name);
+
+                                                                    return (
+                                                                        <button
+                                                                            key={r.chat_id}
+                                                                            onClick={() => handleChatSelect(r.chat_id)}
+                                                                            className={`w-full flex items-center gap-2 px-4 py-2.5 pl-8 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${isChatSelected ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""
+                                                                                }`}
+                                                                        >
+                                                                            <div className="w-3 flex-shrink-0"></div>
+                                                                            <div className="relative flex-shrink-0">
+                                                                                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-green-300 to-green-400 dark:from-green-400 dark:to-green-500 flex items-center justify-center text-white font-medium text-xs">
+                                                                                    {chatInitials}
+                                                                                </div>
+                                                                                {r.is_user_active && (
+                                                                                    <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-[#53bdeb] border-2 border-white dark:border-[#111b21] rounded-full"></div>
+                                                                                )}
+                                                                            </div>
+                                                                            <div className="flex-1 min-w-0 text-left">
+                                                                                <div className="flex items-center justify-between">
+                                                                                    <h3 className="text-xs font-medium text-[#111b21] dark:text-[#e9edef] truncate">
+                                                                                        {name}
+                                                                                    </h3>
+                                                                                    <span className="text-xs text-[#667781] dark:text-[#8696a0] flex-shrink-0 ml-2">
+                                                                                        {formatChatTime(r.updated_time)}
+                                                                                    </span>
+                                                                                </div>
+                                                                                                    <p className="text-xs text-green-500 dark:text-green-300 truncate">
+                                                                                                        {r.user?.userName ? `@${r.user.userName}` : "Client"}
+                                                                                                    </p>
+                                                                            </div>
+                                                                        </button>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })
+                                        )}
+                                    </>
+                                )}
                             </div>
                         ) : (
-                            <div className="flex flex-col">
-                                {chatrooms.map((r) => {
-                                    const isSelected = chatId === r.chat_id;
-                                    const name = r.user?.name || r.user?.userName || "Unknown";
-                                    const initials = getInitials(name);
+                            <>
+                                {!chatrooms.length ? (
+                                    <div className="p-4 text-center text-sm text-[#667781] dark:text-[#8696a0]">
+                                        No chats available
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-col">
+                                        {chatrooms.map((r) => {
+                                            const isSelected = chatId === r.chat_id;
+                                            const name = r.user?.name || r.user?.userName || "Unknown";
+                                            const initials = getInitials(name);
 
-                                    return (
-                                        <button
-                                            key={r.chat_id}
-                                            onClick={() => handleChatSelect(r.chat_id)}
-                                            className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${isSelected ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""
-                                                }`}
-                                        >
-                                            <div className="relative flex-shrink-0">
-                                                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#008069] to-[#006b58] dark:from-[#53bdeb] dark:to-[#008069] flex items-center justify-center text-white font-medium text-lg">
-                                                    {initials}
-                                                </div>
-                                                {r.is_user_active && (
-                                                    <div className="absolute bottom-0 right-0 w-3 h-3 bg-[#53bdeb] border-2 border-white dark:border-[#111b21] rounded-full"></div>
-                                                )}
-                                            </div>
-                                            <div className="flex-1 min-w-0">
-                                                <div className="flex items-center justify-between mb-1">
-                                                    <h3 className="text-base font-medium text-[#111b21] dark:text-[#e9edef] truncate">
-                                                        {name}
-                                                    </h3>
-                                                    <span className="text-xs text-[#667781] dark:text-[#8696a0] flex-shrink-0 ml-2">
-                                                        {formatChatTime(r.updated_time)}
-                                                    </span>
-                                                </div>
-                                                <div className="flex items-center justify-between">
-                                                    <p className="text-sm text-[#667781] dark:text-[#8696a0] truncate">
-                                                        {r.user?.userName ? `@${r.user.userName}` : "No username"}
-                                                    </p>
-                                                    {!r.is_user_active && (
-                                                        <span className="text-xs text-[#667781] dark:text-[#8696a0] flex-shrink-0 ml-2">
-                                                            offline
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        </button>
-                                    );
-                                })}
-                            </div>
+                                            return (
+                                                <button
+                                                    key={r.chat_id}
+                                                    onClick={() => handleChatSelect(r.chat_id)}
+                                                    className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${isSelected ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""
+                                                        }`}
+                                                >
+                                                    <div className="relative flex-shrink-0">
+                                                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#008069] to-[#006b58] dark:from-[#53bdeb] dark:to-[#008069] flex items-center justify-center text-white font-medium text-lg">
+                                                            {initials}
+                                                        </div>
+                                                        {r.is_user_active && (
+                                                            <div className="absolute bottom-0 right-0 w-3 h-3 bg-[#53bdeb] border-2 border-white dark:border-[#111b21] rounded-full"></div>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="flex items-center justify-between mb-1">
+                                                            <h3 className="text-base font-medium text-[#111b21] dark:text-[#e9edef] truncate">
+                                                                {name}
+                                                            </h3>
+                                                            <span className="text-xs text-[#667781] dark:text-[#8696a0] flex-shrink-0 ml-2">
+                                                                {formatChatTime(r.updated_time)}
+                                                            </span>
+                                                        </div>
+                                                        <div className="flex items-center justify-between">
+                                                            <p className="text-sm text-[#667781] dark:text-[#8696a0] truncate">
+                                                                {r.user?.userName ? `@${r.user.userName}` : "No username"}
+                                                            </p>
+                                                            {!r.is_user_active && (
+                                                                <span className="text-xs text-[#667781] dark:text-[#8696a0] flex-shrink-0 ml-2">
+                                                                    offline
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </>
                         )}
                     </div>
                 </aside>
@@ -451,7 +1052,7 @@ function AdminView({ token }: { token: string }) {
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-2 flex-shrink-0">
-                                    {!isSearchOpen && (
+                                    {!isChatSearchOpen && (
                                         <button
                                             onClick={() => startCall()}
                                             disabled={!chatId || callState !== "idle"}
@@ -462,7 +1063,7 @@ function AdminView({ token }: { token: string }) {
                                             <Phone className="w-5 h-5" aria-hidden="true" />
                                         </button>
                                     )}
-                                    {isSearchOpen ? (
+                                    {isChatSearchOpen ? (
                                         <div className="flex items-center gap-2 bg-[#008069]/20 dark:bg-[#2a3942]/50 rounded-lg px-2 py-1 flex-1 max-w-[200px]">
                                             <svg
                                                 width="16"
@@ -483,22 +1084,22 @@ function AdminView({ token }: { token: string }) {
                                             </svg>
                                             <input
                                                 type="text"
-                                                value={searchQuery}
-                                                onChange={(e) => setSearchQuery(e.target.value)}
+                                                value={chatSearchQuery}
+                                                onChange={(e) => setChatSearchQuery(e.target.value)}
                                                 placeholder="Search..."
                                                 className="bg-transparent border-none outline-none text-[#ffffff] dark:text-[#e9edef] text-sm placeholder:text-[#ffffff]/60 dark:placeholder:text-[#8696a0] flex-1 min-w-0"
                                                 autoFocus
                                                 onKeyDown={(e) => {
                                                     if (e.key === "Escape") {
-                                                        setIsSearchOpen(false);
-                                                        setSearchQuery("");
+                                                        setIsChatSearchOpen(false);
+                                                        setChatSearchQuery("");
                                                     }
                                                 }}
                                             />
                                             <button
                                                 onClick={() => {
-                                                    setIsSearchOpen(false);
-                                                    setSearchQuery("");
+                                                    setIsChatSearchOpen(false);
+                                                    setChatSearchQuery("");
                                                 }}
                                                 className="text-[#ffffff] dark:text-[#8696a0] hover:opacity-80 p-1"
                                                 aria-label="Close search"
@@ -523,7 +1124,7 @@ function AdminView({ token }: { token: string }) {
                                         </div>
                                     ) : (
                                         <button
-                                            onClick={() => setIsSearchOpen(true)}
+                                            onClick={() => setIsChatSearchOpen(true)}
                                             className="p-2 text-[#ffffff] dark:text-[#8696a0] hover:bg-[#008069]/80 dark:hover:bg-[#313d45] rounded-full transition-colors"
                                             aria-label="Search messages"
                                             title="Search"
@@ -549,7 +1150,7 @@ function AdminView({ token }: { token: string }) {
                                 </div>
                             </header>
 
-                            <MessageList items={combined} viewerRole="superadmin" searchQuery={searchQuery} />
+                            <MessageList items={combined} viewerRole="superadmin" searchQuery={chatSearchQuery} />
 
                             <div className="flex-shrink-0">
                                 <Composer
@@ -577,6 +1178,8 @@ function AdminView({ token }: { token: string }) {
                 localAudioRef={localAudioRef}
                 remoteAudioRef={remoteAudioRef}
                 displayName={displayName}
+                micPermission={micPermission}
+                speakerPermission={speakerPermission}
             />
         </main>
     );
