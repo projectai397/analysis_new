@@ -2501,7 +2501,10 @@ def create_app() -> Flask:
         except Exception:
             return jsonify({"ok": True, "conversation": [], "chat_id": None})
 
-        msgs = Message.objects(chatroom_id=oid).order_by("+created_time").limit(500)
+        from datetime import datetime, timedelta
+        today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        yesterday_start = today - timedelta(days=1)
+        msgs = Message.objects(chatroom_id=oid, created_time__gte=yesterday_start).order_by("+created_time").limit(500)
         conv = []
         for m in msgs:
             if m.is_file and m.path:
