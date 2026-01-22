@@ -418,19 +418,17 @@ def sync_orders_to_trade():
                 # project existing trade doc (may be None if update arrives before insert)
                 existing = trade.find_one({"order_id": order_id}) or {}
 
-                # new state to write (keep existing _id if any; otherwise we'll upsert)
+                # new state to write
                 new_state = dict(src)
                 new_state["order_id"] = order_id
-                if existing.get("_id"):
-                    new_state["_id"] = existing["_id"]  # preserve trade _id
-                else:
-                    new_state["_id"] = ObjectId()       # first time we see it
+                new_state.pop("_id", None)  # remove _id from $set (immutable field)
 
                 meta_entry = _build_change_metadata(existing, src)
 
                 update = {"$set": new_state}
                 if not existing:
                     update.setdefault("$setOnInsert", {})["metadata"] = []
+                    update["$setOnInsert"]["_id"] = ObjectId()  # set _id only on insert
                 if meta_entry:
                     update.setdefault("$push", {})["metadata"] = meta_entry
 
