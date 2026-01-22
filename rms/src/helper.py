@@ -310,28 +310,27 @@ def faq_reply(user_msg: str):
     return None
 
 def _call_llm_internal(system_prompt: str, user_msg: str) -> str:
-    # Get base URL and ensure it doesn't have a trailing slash or path
-    base_url = os.getenv("LLM_URL")
-    # Clean the URL to get ONLY the protocol and host:port
-    if "/api/" in base_url:
-        base_url = base_url.split("/api/")[0]
+    api_key = os.getenv("OPENAI_API_KEY")
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     
-    endpoint = f"{base_url.rstrip('/')}/api/chat"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
 
     payload = {
-        "model": "mistral:latest",
+        "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg},
         ],
-        "stream": False,
-        "options": {"temperature": 0.1}
+        "temperature": 0.1
     }
 
     try:
-        r = requests.post(endpoint, json=payload, timeout=60)
+        r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=60)
         r.raise_for_status()
-        return r.json().get("message", {}).get("content", "").strip()
+        return r.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
     except Exception as e:
         logger.error(f"LLM Connection Error: {e}")
         return ""
@@ -491,10 +490,10 @@ def query_user_db(user_msg, user_id: str):
     # If user gave a time window + asked for a data noun, treat as account-data even without "my"
     implicit_personal = bool(date_filter and has_data_noun)
 
-    # If it's educational and not personal and not implicit and no ID, do not hit DB
-    # e.g. "how to trade", "what is pnl"
-    if is_educational and not is_personal and not implicit_personal and not found_id:
-        logger.info(" [0] INTENT: Educational (non-personal). Skipping DB.")
+    # If it's educational (how to, what is, etc.) and NOT asking for actual data, skip DB
+    # e.g. "how to login into my account", "how to trade", "what is pnl"
+    if is_educational and not has_data_noun and not found_id and not date_filter:
+        logger.info(" [0] INTENT: Educational question. Skipping DB.")
         return None
 
     # Routing priority
@@ -822,6 +821,32 @@ def format_superadmin_interactive(data_list, collection_name, page=1):
     html.append("</context>")
     return "".join(html)
 
+def _polish_faq_answer(user_question: str, faq_answer: str) -> str:
+    """Use GPT to present FAQ answer in a polished, conversational way."""
+    try:
+        POLISH_PROMPT = f"""You are a friendly customer support agent. A user asked a question and we found a relevant answer in our FAQ.
+
+User Question: "{user_question}"
+
+FAQ Answer: "{faq_answer}"
+
+Rewrite this answer to be:
+- Conversational and helpful (like talking to a friend)
+- Clear with step-by-step instructions if applicable
+- Concise (3-5 sentences max)
+- Professional but warm
+- Do not add information that's not in the FAQ answer
+- Do not mention FAQ, database, or that you found this answer somewhere
+- Never say you are an AI"""
+
+        response = _call_llm_internal(POLISH_PROMPT, user_question)
+        if response:
+            return _clean_llm_text(response)
+        return None
+    except Exception as e:
+        logger.error(f"Error polishing FAQ answer: {e}")
+        return None
+
 def llm_fallback(user_msg, user_id: str) -> str:
     logger.info(f"--- Starting LLM Fallback Flow for User: {user_id} ---")
 
@@ -854,7 +879,9 @@ def llm_fallback(user_msg, user_id: str) -> str:
     logger.info(" STEP: No DB route/data (None). Moving to FAQ check.")
     faq_answer = faq_reply(text)
     if faq_answer:
-        return faq_answer
+        # Use GPT to present FAQ answer in a polished way
+        polished = _polish_faq_answer(text, faq_answer)
+        return polished if polished else faq_answer
 
     # 4) Domain Guard
     logger.info(" STEP: No FAQ match. Checking Domain Guard.")
@@ -873,14 +900,13 @@ def llm_fallback(user_msg, user_id: str) -> str:
     # 5) General LLM Answer
     logger.info(" STEP: Falling back to General LLM support.")
     SUPPORT_SYSTEM = (
-        "You are a customer support agent for a trading app. "
-        "Answer ONLY trading support questions (orders, PNL, KYC, deposits). "
-        "Simple English, no AI mention, 80-130 words."
+        "You are a helpful customer support agent for a trading platform. "
+        "Answer trading-related questions: orders, positions, P&L, KYC, deposits, withdrawals, account access. "
+        "Be concise (2-4 sentences). Use simple language. Never mention you are an AI."
     )
 
     raw_support = _call_llm_internal(SUPPORT_SYSTEM, text)
-    cleaned = _clean_llm_text(raw_support)
-    return _enforce_medium_length(cleaned, 80, 130)
+    return _clean_llm_text(raw_support)
 
 def superadmin_llm_fallback(user_msg: str, pro_id: str) -> str:
     logger.info(f"--- Starting SUPERADMIN LLM Flow for {pro_id} ---")
@@ -913,14 +939,14 @@ def superadmin_llm_fallback(user_msg: str, pro_id: str) -> str:
 
     # 5. LLM (broader permissions than normal user)
     SYSTEM = (
-        "You are an internal system assistant for a trading platform Super Admin. "
-        "You may discuss users, balances, trades, payments, audits, and reports. "
-        "Be concise, accurate, and structured. No emojis."
+        "You are an internal assistant for a trading platform Super Admin. "
+        "You can discuss users, balances, trades, payments, audits, and reports. "
+        "Be concise and structured. No emojis. Never mention you are an AI."
     )
 
     raw = _call_llm_internal(SYSTEM, user_msg)
     return _clean_llm_text(raw)
-    
+
 # ────────────────────── DB upserts ──────────────────────
 def ensure_bot_user() -> SCUser:
     bot = SCUser.objects(is_bot=True).first()
