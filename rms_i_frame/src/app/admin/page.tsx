@@ -124,6 +124,10 @@ function AdminView({ token }: { token: string }) {
         send,
         callEvent,
         clearCallEvent,
+        searchResults,
+        isSearching,
+        searchChatrooms,
+        clearSearch,
     } = useChatSocket({
         token,
         role: "superadmin" as any,
@@ -277,37 +281,6 @@ function AdminView({ token }: { token: string }) {
         setShowChatView(false);
     }, [chatId, resetLiveMessages]);
 
-    useEffect(() => {
-        if (sidebarSearchQuery.trim().length > 0 && hierarchy?.type === "superadmin") {
-            adminsToShow.forEach(admin => {
-                if (!expandedAdmins.has(admin.id) || selectedAdminId !== admin.id) {
-                    selectAdmin(admin.id);
-                    setExpandedAdmins(prev => new Set(prev).add(admin.id));
-                }
-            });
-            
-            if (masters.length > 0) {
-                const allMatchingClients = getAllMatchingClients(sidebarSearchQuery);
-                masters.forEach(master => {
-                    const masterMatches = filterBySearch([master], sidebarSearchQuery).length > 0;
-                    const masterClients = allMatchingClients.filter(c => c.user_id === master.id);
-                    if ((masterMatches || masterClients.length > 0) && !expandedMasters.has(master.id)) {
-                        setExpandedMasters(prev => new Set(prev).add(master.id));
-                        if (!selectedMasterId || selectedMasterId !== master.id) {
-                            const adminId = hierarchy.admins.find(a => expandedAdmins.has(a.id))?.id;
-                            if (adminId) {
-                                selectMaster(master.id, adminId);
-                            }
-                        }
-                    }
-                });
-            }
-        } else if (sidebarSearchQuery.trim().length === 0) {
-            if (selectedAdminId && !expandedAdmins.has(selectedAdminId)) {
-                resetHierarchy();
-            }
-        }
-    }, [sidebarSearchQuery, hierarchy, adminsToShow, selectedAdminId, expandedAdmins, expandedMasters, masters, selectAdmin, selectMaster, resetHierarchy]);
 
     useEffect(() => {
         if (chatId) {
@@ -458,13 +431,16 @@ function AdminView({ token }: { token: string }) {
                                     type="text"
                                     value={sidebarSearchQuery}
                                     onChange={(e) => setSidebarSearchQuery(e.target.value)}
-                                    placeholder="Search..."
+                                    placeholder="Search & press Enter..."
                                     className="bg-transparent border-none outline-none text-[#ffffff] dark:text-[#e9edef] text-sm placeholder:text-[#ffffff]/60 dark:placeholder:text-[#8696a0] flex-1 min-w-0"
                                     autoFocus
                                     onKeyDown={(e) => {
-                                        if (e.key === "Escape") {
+                                        if (e.key === "Enter" && sidebarSearchQuery.trim()) {
+                                            searchChatrooms(sidebarSearchQuery.trim());
+                                        } else if (e.key === "Escape") {
                                             setIsSidebarSearchOpen(false);
                                             setSidebarSearchQuery("");
+                                            clearSearch();
                                         }
                                     }}
                                 />
@@ -472,6 +448,7 @@ function AdminView({ token }: { token: string }) {
                                     onClick={() => {
                                         setIsSidebarSearchOpen(false);
                                         setSidebarSearchQuery("");
+                                        clearSearch();
                                     }}
                                     className="text-[#ffffff] dark:text-[#8696a0] hover:opacity-80 p-1"
                                     aria-label="Close search"
@@ -522,7 +499,151 @@ function AdminView({ token }: { token: string }) {
                     </header>
 
                     <div className="flex-1 overflow-y-auto">
-                        {hierarchy ? (
+                        {isSearching ? (
+                            <div className="p-4 text-center text-sm text-[#667781] dark:text-[#8696a0]">
+                                Searching...
+                            </div>
+                        ) : searchResults ? (
+                            <div className="flex flex-col">
+                                {searchResults.hierarchy.length === 0 ? (
+                                    <div className="p-4 text-center text-sm text-[#667781] dark:text-[#8696a0]">
+                                        No results found for "{searchResults.search}"
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div className="px-4 py-2 bg-[#f0f2f5] dark:bg-[#202c33] text-xs text-[#667781] dark:text-[#8696a0]">
+                                            Found {searchResults.total_count} result(s) for "{searchResults.search}"
+                                        </div>
+                                        {searchResults.hierarchy.map((item: any, idx: number) => {
+                                            if (item.admin) {
+                                                const admin = item.admin;
+                                                return (
+                                                    <div key={admin.id || idx} className="flex flex-col">
+                                                        <div className="w-full flex items-center gap-2 px-4 py-2.5 bg-[#e8f5e9] dark:bg-[#1a3a2a] border-b border-[#e4e6eb] dark:border-[#313d45]">
+                                                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-800 to-green-900 flex items-center justify-center text-white font-medium text-sm">
+                                                                {getInitials(admin.name || admin.userName)}
+                                                            </div>
+                                                            <div className="flex-1 min-w-0 text-left">
+                                                                <h3 className="text-sm font-medium text-[#111b21] dark:text-[#e9edef] truncate">
+                                                                    {admin.name || admin.userName || "Unknown Admin"}
+                                                                </h3>
+                                                                <p className="text-xs text-green-800 dark:text-green-600">Admin</p>
+                                                            </div>
+                                                        </div>
+                                                        {item.masters?.map((masterItem: any) => {
+                                                            const master = masterItem.master;
+                                                            return (
+                                                                <div key={master.id} className="flex flex-col">
+                                                                    <div className="w-full flex items-center gap-2 px-4 py-2.5 pl-8 bg-[#f1f8e9] dark:bg-[#1a2f1a] border-b border-[#e4e6eb] dark:border-[#313d45]">
+                                                                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-green-600 to-green-700 flex items-center justify-center text-white font-medium text-xs">
+                                                                            {getInitials(master.name || master.userName)}
+                                                                        </div>
+                                                                        <div className="flex-1 min-w-0 text-left">
+                                                                            <h3 className="text-sm font-medium text-[#111b21] dark:text-[#e9edef] truncate">
+                                                                                {master.name || master.userName || "Unknown Master"}
+                                                                            </h3>
+                                                                            <p className="text-xs text-green-600 dark:text-green-500">Master</p>
+                                                                        </div>
+                                                                    </div>
+                                                                    {masterItem.clients?.map((client: any) => (
+                                                                        <button
+                                                                            key={client.id}
+                                                                            onClick={() => client.chat_id && handleChatSelect(client.chat_id)}
+                                                                            disabled={!client.chat_id}
+                                                                            className={`w-full flex items-center gap-2 px-4 py-2.5 pl-12 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${chatId === client.chat_id ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""} ${!client.chat_id ? "opacity-50 cursor-not-allowed" : ""}`}
+                                                                        >
+                                                                            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-green-300 to-green-400 flex items-center justify-center text-white font-medium text-xs">
+                                                                                {getInitials(client.name || client.userName)}
+                                                                            </div>
+                                                                            <div className="flex-1 min-w-0 text-left">
+                                                                                <h3 className="text-xs font-medium text-[#111b21] dark:text-[#e9edef] truncate">
+                                                                                    {client.name || client.userName || "Unknown"}
+                                                                                </h3>
+                                                                                <p className="text-xs text-[#667781] dark:text-[#8696a0] truncate">
+                                                                                    {client.phone || "Client"}
+                                                                                </p>
+                                                                            </div>
+                                                                            {!client.chat_id && (
+                                                                                <span className="text-xs text-[#667781] dark:text-[#8696a0]">No chat</span>
+                                                                            )}
+                                                                        </button>
+                                                                    ))}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                );
+                                            } else if (item.master) {
+                                                const master = item.master;
+                                                return (
+                                                    <div key={master.id || idx} className="flex flex-col">
+                                                        <div className="w-full flex items-center gap-2 px-4 py-2.5 bg-[#f1f8e9] dark:bg-[#1a2f1a] border-b border-[#e4e6eb] dark:border-[#313d45]">
+                                                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-600 to-green-700 flex items-center justify-center text-white font-medium text-sm">
+                                                                {getInitials(master.name || master.userName)}
+                                                            </div>
+                                                            <div className="flex-1 min-w-0 text-left">
+                                                                <h3 className="text-sm font-medium text-[#111b21] dark:text-[#e9edef] truncate">
+                                                                    {master.name || master.userName || "Unknown Master"}
+                                                                </h3>
+                                                                <p className="text-xs text-green-600 dark:text-green-500">Master</p>
+                                                            </div>
+                                                        </div>
+                                                        {item.clients?.map((client: any) => (
+                                                            <button
+                                                                key={client.id}
+                                                                onClick={() => client.chat_id && handleChatSelect(client.chat_id)}
+                                                                disabled={!client.chat_id}
+                                                                className={`w-full flex items-center gap-2 px-4 py-2.5 pl-8 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${chatId === client.chat_id ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""} ${!client.chat_id ? "opacity-50 cursor-not-allowed" : ""}`}
+                                                            >
+                                                                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-green-300 to-green-400 flex items-center justify-center text-white font-medium text-xs">
+                                                                    {getInitials(client.name || client.userName)}
+                                                                </div>
+                                                                <div className="flex-1 min-w-0 text-left">
+                                                                    <h3 className="text-xs font-medium text-[#111b21] dark:text-[#e9edef] truncate">
+                                                                        {client.name || client.userName || "Unknown"}
+                                                                    </h3>
+                                                                    <p className="text-xs text-[#667781] dark:text-[#8696a0] truncate">
+                                                                        {client.phone || "Client"}
+                                                                    </p>
+                                                                </div>
+                                                                {!client.chat_id && (
+                                                                    <span className="text-xs text-[#667781] dark:text-[#8696a0]">No chat</span>
+                                                                )}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                );
+                                            } else {
+                                                const client = item;
+                                                return (
+                                                    <button
+                                                        key={client.id || idx}
+                                                        onClick={() => client.chat_id && handleChatSelect(client.chat_id)}
+                                                        disabled={!client.chat_id}
+                                                        className={`w-full flex items-center gap-2 px-4 py-2.5 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${chatId === client.chat_id ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""} ${!client.chat_id ? "opacity-50 cursor-not-allowed" : ""}`}
+                                                    >
+                                                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-300 to-green-400 flex items-center justify-center text-white font-medium text-sm">
+                                                            {getInitials(client.name || client.userName)}
+                                                        </div>
+                                                        <div className="flex-1 min-w-0 text-left">
+                                                            <h3 className="text-sm font-medium text-[#111b21] dark:text-[#e9edef] truncate">
+                                                                {client.name || client.userName || "Unknown"}
+                                                            </h3>
+                                                            <p className="text-xs text-[#667781] dark:text-[#8696a0] truncate">
+                                                                {client.phone || "Client"}
+                                                            </p>
+                                                        </div>
+                                                        {!client.chat_id && (
+                                                            <span className="text-xs text-[#667781] dark:text-[#8696a0]">No chat</span>
+                                                        )}
+                                                    </button>
+                                                );
+                                            }
+                                        })}
+                                    </>
+                                )}
+                            </div>
+                        ) : hierarchy ? (
                             <div className="flex flex-col">
                                 {hierarchy.type === "superadmin" && (
                                     <>
