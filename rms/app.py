@@ -1032,6 +1032,154 @@ def create_app() -> Flask:
                     "limit": limit,
                 }
 
+            def _search_hierarchy(search_query, caller_role, caller_id):
+                from src.config import users as main_users_coll
+                import re as regex_module
+                search_term = search_query.strip()
+                rx = regex_module.compile(regex_module.escape(search_term), regex_module.IGNORECASE)
+                search_filter = {
+                    "$or": [
+                        {"name": rx},
+                        {"userName": rx},
+                        {"phone": rx},
+                    ],
+                    "isDemoAccount": {"$ne": True},
+                }
+                projection = {
+                    "_id": 1, "name": 1, "userName": 1, "phone": 1, "role": 1, "parentId": 1,
+                }
+
+                def _user_info(doc):
+                    uid = doc.get("_id")
+                    room = Chatroom.objects(user_id=uid).first()
+                    return {
+                        "id": str(uid) if uid else None,
+                        "name": doc.get("name") or doc.get("userName") or "",
+                        "userName": doc.get("userName") or "",
+                        "phone": doc.get("phone") or "",
+                        "role": str(doc.get("role")) if doc.get("role") else None,
+                        "chat_id": str(room.id) if room else None,
+                    }
+
+                def _get_user_by_id(uid):
+                    doc = main_users_coll.find_one({"_id": uid}, projection)
+                    return doc
+
+                if caller_role == "superadmin":
+                    admins_raw = list(main_users_coll.find({"role": config.ADMIN_ROLE_ID, "parentId": caller_id, "isDemoAccount": {"$ne": True}}, {"_id": 1}))
+                    admin_ids = [a["_id"] for a in admins_raw]
+                    if not admin_ids:
+                        return {"hierarchy": [], "search_type": "hierarchical", "total_count": 0}
+
+                    masters_raw = list(main_users_coll.find({"role": config.MASTER_ROLE_ID, "parentId": {"$in": admin_ids}, "isDemoAccount": {"$ne": True}}, {"_id": 1, "parentId": 1}))
+                    master_ids = [m["_id"] for m in masters_raw]
+                    master_to_admin = {m["_id"]: m["parentId"] for m in masters_raw}
+
+                    matched_users = list(main_users_coll.find({**search_filter, "role": config.USER_ROLE_ID, "parentId": {"$in": master_ids}}, projection))
+                    matched_masters = list(main_users_coll.find({**search_filter, "role": config.MASTER_ROLE_ID, "parentId": {"$in": admin_ids}}, projection))
+
+                    hierarchy = {}
+
+                    for u in matched_users:
+                        master_id = u.get("parentId")
+                        if not master_id:
+                            continue
+                        admin_id = master_to_admin.get(master_id)
+                        if not admin_id:
+                            continue
+                        admin_id_str = str(admin_id)
+                        master_id_str = str(master_id)
+                        if admin_id_str not in hierarchy:
+                            admin_doc = _get_user_by_id(admin_id)
+                            hierarchy[admin_id_str] = {
+                                "admin": _user_info(admin_doc) if admin_doc else {"id": admin_id_str, "name": "", "userName": "", "phone": ""},
+                                "masters": {},
+                            }
+                        if master_id_str not in hierarchy[admin_id_str]["masters"]:
+                            master_doc = _get_user_by_id(master_id)
+                            hierarchy[admin_id_str]["masters"][master_id_str] = {
+                                "master": _user_info(master_doc) if master_doc else {"id": master_id_str, "name": "", "userName": "", "phone": ""},
+                                "clients": [],
+                            }
+                        hierarchy[admin_id_str]["masters"][master_id_str]["clients"].append(_user_info(u))
+
+                    for m in matched_masters:
+                        admin_id = m.get("parentId")
+                        if not admin_id:
+                            continue
+                        admin_id_str = str(admin_id)
+                        master_id_str = str(m["_id"])
+                        if admin_id_str not in hierarchy:
+                            admin_doc = _get_user_by_id(admin_id)
+                            hierarchy[admin_id_str] = {
+                                "admin": _user_info(admin_doc) if admin_doc else {"id": admin_id_str, "name": "", "userName": "", "phone": ""},
+                                "masters": {},
+                            }
+                        if master_id_str not in hierarchy[admin_id_str]["masters"]:
+                            hierarchy[admin_id_str]["masters"][master_id_str] = {
+                                "master": _user_info(m),
+                                "clients": [],
+                            }
+
+                    result = []
+                    for admin_id_str, admin_data in hierarchy.items():
+                        masters_list = []
+                        for master_id_str, master_data in admin_data["masters"].items():
+                            masters_list.append({
+                                "master": master_data["master"],
+                                "clients": master_data["clients"],
+                            })
+                        result.append({
+                            "admin": admin_data["admin"],
+                            "masters": masters_list,
+                        })
+
+                    total = sum(len(a["masters"]) + sum(len(m["clients"]) for m in a["masters"]) for a in result)
+                    return {"hierarchy": result, "search_type": "hierarchical", "total_count": total}
+
+                elif caller_role == "admin":
+                    masters_raw = list(main_users_coll.find({"role": config.MASTER_ROLE_ID, "parentId": caller_id, "isDemoAccount": {"$ne": True}}, {"_id": 1}))
+                    master_ids = [m["_id"] for m in masters_raw]
+                    if not master_ids:
+                        return {"hierarchy": [], "search_type": "hierarchical", "total_count": 0}
+
+                    matched_users = list(main_users_coll.find({**search_filter, "role": config.USER_ROLE_ID, "parentId": {"$in": master_ids}}, projection))
+                    matched_masters = list(main_users_coll.find({**search_filter, "role": config.MASTER_ROLE_ID, "parentId": caller_id}, projection))
+
+                    hierarchy = {}
+
+                    for u in matched_users:
+                        master_id = u.get("parentId")
+                        if not master_id:
+                            continue
+                        master_id_str = str(master_id)
+                        if master_id_str not in hierarchy:
+                            master_doc = _get_user_by_id(master_id)
+                            hierarchy[master_id_str] = {
+                                "master": _user_info(master_doc) if master_doc else {"id": master_id_str, "name": "", "userName": "", "phone": ""},
+                                "clients": [],
+                            }
+                        hierarchy[master_id_str]["clients"].append(_user_info(u))
+
+                    for m in matched_masters:
+                        master_id_str = str(m["_id"])
+                        if master_id_str not in hierarchy:
+                            hierarchy[master_id_str] = {
+                                "master": _user_info(m),
+                                "clients": [],
+                            }
+
+                    result = [{"master": v["master"], "clients": v["clients"]} for v in hierarchy.values()]
+                    total = len(result) + sum(len(m["clients"]) for m in result)
+                    return {"hierarchy": result, "search_type": "hierarchical", "total_count": total}
+
+                elif caller_role == "master":
+                    matched_users = list(main_users_coll.find({**search_filter, "role": config.USER_ROLE_ID, "parentId": caller_id}, projection))
+                    result = [_user_info(u) for u in matched_users]
+                    return {"hierarchy": result, "search_type": "hierarchical", "total_count": len(result)}
+
+                return {"hierarchy": [], "search_type": "hierarchical", "total_count": 0}
+
             def _get_chatrooms_paginated(page=1, search_query=None, limit=50, selected_admin_id=None, selected_master_id=None):
                 base_fields = (
                     "id",
@@ -1056,6 +1204,19 @@ def create_app() -> Flask:
                 if selected_master_id:
                     return _get_chatrooms_for_master(_as_oid(selected_master_id), page, limit)
 
+                if search_query and search_query.strip():
+                    caller_role = "superadmin" if is_superadmin else ("admin" if is_admin else ("master" if is_master else "user"))
+                    hierarchy_result = _search_hierarchy(search_query, caller_role, pro_id)
+                    return {
+                        "chatrooms": [],
+                        "hierarchy": hierarchy_result.get("hierarchy", []),
+                        "search_type": "hierarchical",
+                        "total_count": hierarchy_result.get("total_count", 0),
+                        "total_pages": 1,
+                        "current_page": 1,
+                        "limit": limit,
+                    }
+
                 if is_superadmin:
                     try:
                         rooms_query = Chatroom.objects(
@@ -1076,33 +1237,6 @@ def create_app() -> Flask:
                     rooms_query = Chatroom.objects(super_admin_id=pro_id)
                 else:
                     rooms_query = Chatroom.objects(id=None)
-
-                if search_query and search_query.strip():
-                    search_term = search_query.strip()
-                    matching_user_ids = set()
-
-                    search_cursor = support_users_coll.find(
-                        {
-                            "$or": [
-                                {"name": {"$regex": search_term, "$options": "i"}},
-                                {"userName": {"$regex": search_term, "$options": "i"}},
-                                {"user_name": {"$regex": search_term, "$options": "i"}},
-                                {"phone": {"$regex": search_term, "$options": "i"}},
-                            ]
-                        },
-                        {"_id": 0, "user_id": 1},
-                    )
-                    for doc in search_cursor:
-                        user_id = doc.get("user_id")
-                        if user_id:
-                            oid = _as_oid(user_id)
-                            if oid:
-                                matching_user_ids.add(oid)
-
-                    if matching_user_ids:
-                        rooms_query = rooms_query.filter(user_id__in=list(matching_user_ids))
-                    else:
-                        rooms_query = Chatroom.objects(id=None)
 
                 rooms_query = rooms_query.only(*base_fields).order_by("-updated_time")
 
@@ -1500,17 +1634,32 @@ def create_app() -> Flask:
 
                         result = _get_chatrooms_paginated(page=page, search_query=search_query, limit=limit)
 
-                        payload = {
-                            "type": "chatrooms_list",
-                            "chatrooms": result["chatrooms"],
-                            "pagination": {
-                                "total_count": result["total_count"],
-                                "total_pages": result["total_pages"],
-                                "current_page": result["current_page"],
-                                "limit": result["limit"],
-                                "search": search_query if search_query else None,
-                            },
-                        }
+                        if result.get("search_type") == "hierarchical":
+                            payload = {
+                                "type": "chatrooms_list",
+                                "chatrooms": result.get("chatrooms", []),
+                                "hierarchy": result.get("hierarchy", []),
+                                "search_type": "hierarchical",
+                                "pagination": {
+                                    "total_count": result["total_count"],
+                                    "total_pages": result["total_pages"],
+                                    "current_page": result["current_page"],
+                                    "limit": result["limit"],
+                                    "search": search_query if search_query else None,
+                                },
+                            }
+                        else:
+                            payload = {
+                                "type": "chatrooms_list",
+                                "chatrooms": result["chatrooms"],
+                                "pagination": {
+                                    "total_count": result["total_count"],
+                                    "total_pages": result["total_pages"],
+                                    "current_page": result["current_page"],
+                                    "limit": result["limit"],
+                                    "search": search_query if search_query else None,
+                                },
+                            }
                         ws.send(json.dumps(payload))
                         last_activity["ts"] = time.time()
                         continue
