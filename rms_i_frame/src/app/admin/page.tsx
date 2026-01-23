@@ -289,37 +289,6 @@ function AdminView({ token }: { token: string }) {
         setShowChatView(false);
     }, [chatId, resetLiveMessages]);
 
-    useEffect(() => {
-        if (sidebarSearchQuery.trim().length > 0 && hierarchy?.type === "superadmin") {
-            adminsToShow.forEach(admin => {
-                if (!expandedAdmins.has(admin.id) || selectedAdminId !== admin.id) {
-                    selectAdmin(admin.id);
-                    setExpandedAdmins(prev => new Set(prev).add(admin.id));
-                }
-            });
-            
-            if (masters.length > 0) {
-                const allMatchingClients = getAllMatchingClients(sidebarSearchQuery);
-                masters.forEach(master => {
-                    const masterMatches = filterBySearch([master], sidebarSearchQuery).length > 0;
-                    const masterClients = allMatchingClients.filter(c => c.user_id === master.id);
-                    if ((masterMatches || masterClients.length > 0) && !expandedMasters.has(master.id)) {
-                        setExpandedMasters(prev => new Set(prev).add(master.id));
-                        if (!selectedMasterId || selectedMasterId !== master.id) {
-                            const adminId = hierarchy.admins.find(a => expandedAdmins.has(a.id))?.id;
-                            if (adminId) {
-                                selectMaster(master.id, adminId);
-                            }
-                        }
-                    }
-                });
-            }
-        } else if (sidebarSearchQuery.trim().length === 0) {
-            if (selectedAdminId && !expandedAdmins.has(selectedAdminId)) {
-                resetHierarchy();
-            }
-        }
-    }, [sidebarSearchQuery, hierarchy, adminsToShow, selectedAdminId, expandedAdmins, expandedMasters, masters, selectAdmin, selectMaster, resetHierarchy]);
 
     useEffect(() => {
         if (chatId) {
