@@ -11,6 +11,7 @@ import { useSearchParams } from "next/navigation";
 import { useWebRTC } from "@/hooks/use-webrtc";
 import { CallUI } from "@/components/call/call-ui";
 import { Phone } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 function decodeJWT(token: string): Record<string, unknown> | null {
     try {
@@ -104,6 +105,7 @@ function AdminPageInner() {
 function AdminView({ token }: { token: string }) {
     const session = decodeJWT(token);
     const superadminId = session?._id as string | undefined;
+    const { toast } = useToast();
     
     const {
         status,
@@ -124,6 +126,7 @@ function AdminView({ token }: { token: string }) {
         send,
         callEvent,
         clearCallEvent,
+        searchResults,
     } = useChatSocket({
         token,
         role: "superadmin" as any,
@@ -142,6 +145,7 @@ function AdminView({ token }: { token: string }) {
     const [chatSearchQuery, setChatSearchQuery] = useState("");
     const [expandedAdmins, setExpandedAdmins] = useState<Set<string>>(new Set());
     const [expandedMasters, setExpandedMasters] = useState<Set<string>>(new Set());
+    const [showSearchResults, setShowSearchResults] = useState(false);
 
     const {
         callState,
@@ -209,9 +213,17 @@ function AdminView({ token }: { token: string }) {
         } else if (callEvent.type === "call.error") {
             console.error("[Master] Call error:", callEvent.error);
             if (callEvent.error === "target_offline") {
-                alert("Target is offline or not connected.");
+                toast({
+                    title: "Call Error",
+                    description: "Target is offline or not connected.",
+                    variant: "destructive",
+                });
             } else {
-                alert(`Call error: ${callEvent.error}`);
+                toast({
+                    title: "Call Error",
+                    description: callEvent.error || "An error occurred during the call.",
+                    variant: "destructive",
+                });
             }
             endCall();
             clearCallEvent();
@@ -457,7 +469,16 @@ function AdminView({ token }: { token: string }) {
                                 <input
                                     type="text"
                                     value={sidebarSearchQuery}
-                                    onChange={(e) => setSidebarSearchQuery(e.target.value)}
+                                    onChange={(e) => {
+                                        const query = e.target.value;
+                                        setSidebarSearchQuery(query);
+                                        setShowSearchResults(false);
+                                        if (query.trim()) {
+                                            send({ type: "list_chatrooms", search: query.trim(), page: 1, limit: 50 });
+                                        } else {
+                                            setShowSearchResults(false);
+                                        }
+                                    }}
                                     placeholder="Search..."
                                     className="bg-transparent border-none outline-none text-[#ffffff] dark:text-[#e9edef] text-sm placeholder:text-[#ffffff]/60 dark:placeholder:text-[#8696a0] flex-1 min-w-0"
                                     autoFocus
@@ -465,6 +486,9 @@ function AdminView({ token }: { token: string }) {
                                         if (e.key === "Escape") {
                                             setIsSidebarSearchOpen(false);
                                             setSidebarSearchQuery("");
+                                            setShowSearchResults(false);
+                                        } else if (e.key === "Enter" && sidebarSearchQuery.trim()) {
+                                            setShowSearchResults(true);
                                         }
                                     }}
                                 />
@@ -472,6 +496,7 @@ function AdminView({ token }: { token: string }) {
                                     onClick={() => {
                                         setIsSidebarSearchOpen(false);
                                         setSidebarSearchQuery("");
+                                        setShowSearchResults(false);
                                     }}
                                     className="text-[#ffffff] dark:text-[#8696a0] hover:opacity-80 p-1"
                                     aria-label="Close search"
@@ -522,7 +547,57 @@ function AdminView({ token }: { token: string }) {
                     </header>
 
                     <div className="flex-1 overflow-y-auto">
-                        {hierarchy ? (
+                        {showSearchResults && searchResults.length > 0 ? (
+                            <div className="flex flex-col">
+                                {searchResults.map((r) => {
+                                    const isSelected = chatId === r.chat_id;
+                                    const name = r.user?.name || r.user?.userName || "Unknown";
+                                    const initials = getInitials(name);
+
+                                    return (
+                                        <button
+                                            key={r.chat_id}
+                                            onClick={() => handleChatSelect(r.chat_id)}
+                                            className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${isSelected ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""
+                                                }`}
+                                        >
+                                            <div className="relative flex-shrink-0">
+                                                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#008069] to-[#006b58] dark:from-[#53bdeb] dark:to-[#008069] flex items-center justify-center text-white font-medium text-lg">
+                                                    {initials}
+                                                </div>
+                                                {r.is_user_active && (
+                                                    <div className="absolute bottom-0 right-0 w-3 h-3 bg-[#53bdeb] border-2 border-white dark:border-[#111b21] rounded-full"></div>
+                                                )}
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center justify-between mb-1">
+                                                    <h3 className="text-base font-medium text-[#111b21] dark:text-[#e9edef] truncate">
+                                                        {name}
+                                                    </h3>
+                                                    <span className="text-xs text-[#667781] dark:text-[#8696a0] flex-shrink-0 ml-2">
+                                                        {formatChatTime(r.updated_time)}
+                                                    </span>
+                                                </div>
+                                                <div className="flex items-center justify-between">
+                                                    <p className="text-sm text-[#667781] dark:text-[#8696a0] truncate">
+                                                        {r.user?.userName ? `@${r.user.userName}` : "No username"}
+                                                    </p>
+                                                    {!r.is_user_active && (
+                                                        <span className="text-xs text-[#667781] dark:text-[#8696a0] flex-shrink-0 ml-2">
+                                                            offline
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        ) : showSearchResults && searchResults.length === 0 && sidebarSearchQuery.trim() ? (
+                            <div className="p-4 text-center text-sm text-[#667781] dark:text-[#8696a0]">
+                                No results found for "{sidebarSearchQuery}"
+                            </div>
+                        ) : hierarchy ? (
                             <div className="flex flex-col">
                                 {hierarchy.type === "superadmin" && (
                                     <>

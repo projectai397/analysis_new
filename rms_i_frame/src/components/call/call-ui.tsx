@@ -73,10 +73,28 @@ export function CallUI({
     toasterStatus 
   })
 
+  useEffect(() => {
+    if (callState === "connected" && remoteAudioRef.current) {
+      const audio = remoteAudioRef.current
+      if (audio.srcObject) {
+        audio.muted = !isRemoteAudioEnabled
+        audio.volume = isRemoteAudioEnabled ? 1.0 : 0
+        audio.play().catch(err => {
+          console.error("[CallUI] Error playing remote audio:", err)
+        })
+        console.log("[CallUI] Remote audio configured", {
+          muted: audio.muted,
+          volume: audio.volume,
+          hasStream: !!audio.srcObject
+        })
+      }
+    }
+  }, [callState, isRemoteAudioEnabled])
+
   return (
     <>
-      <audio ref={localAudioRef} autoPlay muted />
-      <audio ref={remoteAudioRef} autoPlay />
+      <audio ref={localAudioRef} autoPlay muted playsInline />
+      <audio ref={remoteAudioRef} autoPlay playsInline />
       
       <CallToaster
         show={showToaster}

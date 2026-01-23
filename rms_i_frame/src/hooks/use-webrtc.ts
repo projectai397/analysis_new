@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { ClientEvent } from "@/lib/types"
+import { toast } from "@/hooks/use-toast"
 
 export type CallState = "idle" | "ringing" | "connecting" | "connected" | "ended"
 
@@ -60,10 +61,25 @@ export function useWebRTC({ chatId, role, send }: UseWebRTCOptions) {
     }
 
     pc.ontrack = (event) => {
+      console.log("[WebRTC] ontrack event received", { 
+        streams: event.streams.length, 
+        tracks: event.track ? [event.track.kind, event.track.id] : null,
+        streamTracks: event.streams[0]?.getTracks().map(t => ({ kind: t.kind, id: t.id, enabled: t.enabled }))
+      })
       if (event.streams[0]) {
         remoteStreamRef.current = event.streams[0]
         if (remoteAudioRef.current) {
           remoteAudioRef.current.srcObject = event.streams[0]
+          remoteAudioRef.current.muted = false
+          remoteAudioRef.current.volume = 1.0
+          remoteAudioRef.current.play().catch(err => {
+            console.error("[WebRTC] Error playing remote audio:", err)
+          })
+          console.log("[WebRTC] Remote audio stream set and play() called", {
+            muted: remoteAudioRef.current.muted,
+            volume: remoteAudioRef.current.volume,
+            readyState: remoteAudioRef.current.readyState
+          })
         }
       }
     }
@@ -87,32 +103,79 @@ export function useWebRTC({ chatId, role, send }: UseWebRTCOptions) {
     return pc
   }, [send])
 
-  const requestPermissions = useCallback(async () => {
+  const checkMicrophonePermission = useCallback(async () => {
     try {
       if (navigator.permissions && navigator.permissions.query) {
         try {
           const micPermission = await navigator.permissions.query({ name: "microphone" as PermissionName })
-          setMicPermission(micPermission.state)
+          const currentState = micPermission.state
+          setMicPermission(currentState)
           
           micPermission.onchange = () => {
-            setMicPermission(micPermission.state)
+            const newState = micPermission.state
+            setMicPermission(newState)
+            if (newState === "granted") {
+              toast({
+                title: "Microphone Permission",
+                description: "Microphone access has been granted.",
+              })
+            } else if (newState === "denied") {
+              toast({
+                title: "Microphone Permission",
+                description: "Microphone access has been denied. Please enable it in your browser settings.",
+                variant: "destructive",
+              })
+            }
           }
+          return currentState
         } catch (permError) {
           console.warn("[WebRTC] Permission query not supported")
         }
       }
-
+      
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
         stream.getTracks().forEach(track => track.stop())
         setMicPermission("granted")
+        return "granted"
       } catch (error: any) {
         if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
           setMicPermission("denied")
+          return "denied"
         } else {
           setMicPermission("denied")
+          return "denied"
         }
-        throw error
+      }
+    } catch (error) {
+      console.warn("[WebRTC] Permission check failed:", error)
+      setMicPermission("denied")
+      return "denied"
+    }
+  }, [])
+
+  const requestPermissions = useCallback(async () => {
+    try {
+      const permissionState = await checkMicrophonePermission()
+      
+      if (permissionState !== "granted") {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+          stream.getTracks().forEach(track => track.stop())
+          setMicPermission("granted")
+          toast({
+            title: "Microphone Permission",
+            description: "Microphone access has been granted.",
+          })
+        } catch (error: any) {
+          if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
+            setMicPermission("denied")
+            throw error
+          } else {
+            setMicPermission("denied")
+            throw error
+          }
+        }
       }
 
       setSpeakerPermission("granted")
@@ -120,13 +183,17 @@ export function useWebRTC({ chatId, role, send }: UseWebRTCOptions) {
       console.warn("[WebRTC] Permission request failed:", error)
       throw error
     }
-  }, [])
+  }, [checkMicrophonePermission])
 
   const startCall = useCallback(async () => {
     console.log("[WebRTC] startCall called", { chatId, callState, role })
     if (!chatId) {
       console.warn("[WebRTC] Cannot start call: no chatId")
-      alert("Cannot start call: No chatroom selected")
+      toast({
+        title: "Cannot Start Call",
+        description: "No chatroom selected. Please select a chatroom first.",
+        variant: "destructive",
+      })
       return
     }
     if (callState !== "idle") {
@@ -137,16 +204,12 @@ export function useWebRTC({ chatId, role, send }: UseWebRTCOptions) {
     try {
       await requestPermissions()
     } catch (error) {
-      const retry = confirm("Microphone permission is required for calls. Would you like to try again?")
-      if (!retry) {
-        return
-      }
-      try {
-        await requestPermissions()
-      } catch (retryError) {
-        alert("Microphone permission is required. Please enable it in your browser settings.")
-        return
-      }
+      toast({
+        title: "Microphone Permission Required",
+        description: "Microphone permission is required for calls. Please enable it in your browser settings.",
+        variant: "destructive",
+      })
+      return
     }
 
     console.log("[WebRTC] Starting call, sending call.start")
@@ -185,16 +248,12 @@ export function useWebRTC({ chatId, role, send }: UseWebRTCOptions) {
     try {
       await requestPermissions()
     } catch (error) {
-      const retry = confirm("Microphone permission is required for calls. Would you like to try again?")
-      if (!retry) {
-        return
-      }
-      try {
-        await requestPermissions()
-      } catch (retryError) {
-        alert("Microphone permission is required. Please enable it in your browser settings.")
-        return
-      }
+      toast({
+        title: "Microphone Permission Required",
+        description: "Microphone permission is required for calls. Please enable it in your browser settings.",
+        variant: "destructive",
+      })
+      return
     }
 
     console.log("[WebRTC] Accepting call, sending call.accept")
@@ -223,6 +282,13 @@ export function useWebRTC({ chatId, role, send }: UseWebRTCOptions) {
       localStreamRef.current = stream
       if (localAudioRef.current) {
         localAudioRef.current.srcObject = stream
+        localAudioRef.current.muted = true
+        localAudioRef.current.play().catch(err => {
+          console.error("[WebRTC] Error playing local audio:", err)
+        })
+        console.log("[WebRTC] Local audio stream set", {
+          tracks: stream.getTracks().map(t => ({ kind: t.kind, id: t.id, enabled: t.enabled }))
+        })
       }
 
       const pc = createPeerConnection()
@@ -265,6 +331,13 @@ export function useWebRTC({ chatId, role, send }: UseWebRTCOptions) {
       localStreamRef.current = stream
       if (localAudioRef.current) {
         localAudioRef.current.srcObject = stream
+        localAudioRef.current.muted = true
+        localAudioRef.current.play().catch(err => {
+          console.error("[WebRTC] Error playing local audio:", err)
+        })
+        console.log("[WebRTC] Local audio stream set", {
+          tracks: stream.getTracks().map(t => ({ kind: t.kind, id: t.id, enabled: t.enabled }))
+        })
       }
 
       const pc = createPeerConnection()
@@ -421,12 +494,44 @@ export function useWebRTC({ chatId, role, send }: UseWebRTCOptions) {
 
   const toggleRemoteAudio = useCallback(() => {
     setIsRemoteAudioEnabled((prev) => {
+      const newValue = !prev
       if (remoteAudioRef.current) {
-        remoteAudioRef.current.muted = !prev
+        remoteAudioRef.current.muted = newValue
+        if (newValue) {
+          remoteAudioRef.current.volume = 0
+        } else {
+          remoteAudioRef.current.volume = 1.0
+          remoteAudioRef.current.play().catch(err => {
+            console.error("[WebRTC] Error playing remote audio after unmute:", err)
+          })
+        }
       }
-      return !prev
+      return newValue
     })
   }, [])
+
+  useEffect(() => {
+    checkMicrophonePermission()
+  }, [checkMicrophonePermission])
+
+  useEffect(() => {
+    if (callState === "connected" && remoteStreamRef.current && remoteAudioRef.current) {
+      if (remoteAudioRef.current.srcObject !== remoteStreamRef.current) {
+        remoteAudioRef.current.srcObject = remoteStreamRef.current
+      }
+      remoteAudioRef.current.muted = !isRemoteAudioEnabled
+      remoteAudioRef.current.volume = isRemoteAudioEnabled ? 1.0 : 0
+      remoteAudioRef.current.play().catch(err => {
+        console.error("[WebRTC] Error playing remote audio when connected:", err)
+      })
+      console.log("[WebRTC] Remote audio configured when connected", {
+        hasStream: !!remoteStreamRef.current,
+        muted: remoteAudioRef.current.muted,
+        volume: remoteAudioRef.current.volume,
+        tracks: remoteStreamRef.current.getTracks().map(t => ({ kind: t.kind, enabled: t.enabled }))
+      })
+    }
+  }, [isRemoteAudioEnabled, callState])
 
   useEffect(() => {
     return () => {
