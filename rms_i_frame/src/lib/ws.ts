@@ -198,25 +198,6 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
             }
             return prev
           })
-        } else if (data.type === "chatrooms_list") {
-          console.log("[WS] Received chatrooms_list event:", data)
-          const listData = data as any
-          if (listData.search_type === "hierarchical" && listData.hierarchy) {
-            setSearchResults({
-              hierarchy: listData.hierarchy,
-              search_type: "hierarchical",
-              total_count: listData.pagination?.total_count || 0,
-              search: listData.pagination?.search || "",
-            })
-          } else {
-            setChatrooms(
-              [...(listData.chatrooms || [])].sort(
-                (a: any, b: any) => new Date(b.updated_time).getTime() - new Date(a.updated_time).getTime(),
-              ),
-            )
-            setSearchResults(null)
-          }
-          setIsSearching(false)
         } else if (data.type === "call.incoming") {
           console.log("[WS] Received call.incoming event:", data)
           setCallEvent(data as ServerCallIncoming)
@@ -387,32 +368,6 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
     setMasters([])
   }, [])
 
-  const lastSearchRef = useRef<string>("")
-
-  const searchChatrooms = useCallback(
-    (searchQuery: string) => {
-      const trimmed = searchQuery.trim()
-      if (!trimmed) {
-        setSearchResults(null)
-        setIsSearching(false)
-        lastSearchRef.current = ""
-        return
-      }
-      if (lastSearchRef.current === trimmed) {
-        return
-      }
-      lastSearchRef.current = trimmed
-      setIsSearching(true)
-      send({ type: "list_chatrooms", search: trimmed, page: 1, limit: 100 })
-    },
-    [send],
-  )
-
-  const clearSearch = useCallback(() => {
-    setSearchResults(null)
-    setIsSearching(false)
-    lastSearchRef.current = ""
-  }, [])
 
   return {
     status,
