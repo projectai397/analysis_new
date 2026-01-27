@@ -73,10 +73,70 @@ export function CallUI({
     toasterStatus 
   })
 
+  useEffect(() => {
+    const audio = remoteAudioRef.current
+    if (callState === "connected" && audio) {
+      if (audio.srcObject) {
+        audio.muted = !isRemoteAudioEnabled
+        audio.volume = isRemoteAudioEnabled ? 1.0 : 0
+        
+        const playPromise = audio.play()
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => {
+              console.log("[CallUI] Remote audio play() succeeded", {
+                muted: audio.muted,
+                volume: audio.volume,
+                readyState: audio.readyState
+              })
+            })
+            .catch(err => {
+              console.error("[CallUI] Error playing remote audio:", err)
+              setTimeout(() => {
+                if (audio && audio.srcObject) {
+                  audio.play().catch(e => {
+                    console.error("[CallUI] Retry play() failed:", e)
+                  })
+                }
+              }, 100)
+            })
+        }
+        
+        console.log("[CallUI] Remote audio configured", {
+          muted: audio.muted,
+          volume: audio.volume,
+          hasStream: !!audio.srcObject,
+          readyState: audio.readyState
+        })
+      } else {
+        console.warn("[CallUI] Remote audio has no srcObject when connected")
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callState, isRemoteAudioEnabled])
+
+  useEffect(() => {
+    const localAudio = localAudioRef.current
+    const remoteAudio = remoteAudioRef.current
+    
+    if (localAudio) {
+      localAudio.setAttribute("autoplay", "true")
+      localAudio.setAttribute("muted", "true")
+      localAudio.setAttribute("playsinline", "true")
+    }
+    
+    if (remoteAudio) {
+      remoteAudio.setAttribute("autoplay", "true")
+      remoteAudio.setAttribute("playsinline", "true")
+      remoteAudio.muted = false
+      remoteAudio.volume = 1.0
+    }
+  }, [])
+
   return (
     <>
-      <audio ref={localAudioRef} autoPlay muted />
-      <audio ref={remoteAudioRef} autoPlay />
+      <audio ref={localAudioRef} autoPlay muted playsInline />
+      <audio ref={remoteAudioRef} autoPlay playsInline />
       
       <CallToaster
         show={showToaster}

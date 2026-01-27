@@ -203,6 +203,39 @@ export type ServerCallError = {
   error: string
 }
 
+export type ServerChatroomsList = {
+  type: "chatrooms_list"
+  chatrooms: {
+    role: string
+    chat_id: string
+    user_id: string
+    is_user_active: boolean
+    is_superadmin_active: boolean
+    updated_time: string
+    room_type?: string
+    user?: {
+      name: string
+      userName: string
+      phone?: string
+    }
+  }[]
+  pagination?: {
+    total_count: number
+    total_pages: number
+    current_page: number
+    limit: number
+    search?: string | null
+  }
+  hierarchy?: {
+    type: "superadmin"
+    admins: HierarchyAdmin[]
+  } | {
+    type: "admin"
+    masters: HierarchyMaster[]
+  }
+  search_type?: "hierarchical" | string
+}
+
 export type ServerEvent =
   | ServerJoinedUser
   | ServerJoinedAdminList
@@ -222,12 +255,14 @@ export type ServerEvent =
   | ServerCallIce
   | ServerCallEnded
   | ServerCallError
+  | ServerChatroomsList
 
 export type ClientPing = { type: "ping" }
 export type ClientSelectRoom = { type: "select_chatroom"; chat_id: string }
 export type ClientSelectAdmin = { type: "select_admin"; admin_id: string }
 export type ClientSelectMaster = { type: "select_master"; master_id: string; admin_id?: string }
 export type ClientSendText = { type: "message"; text: string }
+export type ClientListChatrooms = { type: "list_chatrooms"; search?: string; page?: number; limit?: number }
 export type ClientCallStart = { type: "call.start" }
 export type ClientCallAccept = { type: "call.accept"; call_id: string }
 export type ClientCallReject = { type: "call.reject"; call_id: string }
@@ -235,7 +270,7 @@ export type ClientCallOffer = { type: "call.offer"; call_id: string; sdp: RTCSes
 export type ClientCallAnswer = { type: "call.answer"; call_id: string; sdp: RTCSessionDescriptionInit }
 export type ClientCallIce = { type: "call.ice"; call_id: string; candidate: RTCIceCandidateInit }
 export type ClientCallEnd = { type: "call.end"; call_id: string }
-export type ClientEvent = ClientPing | ClientSelectRoom | ClientSelectAdmin | ClientSelectMaster | ClientSendText | ClientCallStart | ClientCallAccept | ClientCallReject | ClientCallOffer | ClientCallAnswer | ClientCallIce | ClientCallEnd
+export type ClientEvent = ClientPing | ClientSelectRoom | ClientSelectAdmin | ClientSelectMaster | ClientSendText | ClientListChatrooms | ClientCallStart | ClientCallAccept | ClientCallReject | ClientCallOffer | ClientCallAnswer | ClientCallIce | ClientCallEnd
 
 export type ConversationItem =
   | {

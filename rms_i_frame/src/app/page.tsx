@@ -14,6 +14,7 @@ import { useSearchParams } from "next/navigation"
 import { useWebRTC } from "@/hooks/use-webrtc"
 import { CallUI } from "@/components/call/call-ui"
 import { Phone } from "lucide-react"
+import { useToast } from "@/hooks/use-toast"
 
 export default function UserPage() {
 
@@ -56,6 +57,7 @@ function UserPageInner() {
 
 function UserView({ token }: { token: string }) {
   const { status, chatId, messages, sendText, resetLiveMessages, send, callEvent, clearCallEvent } = useChatSocket({ token, role: "user" as any })
+  const { toast } = useToast()
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const [optimisticMessages, setOptimisticMessages] = useState<ConversationItem[]>([])
@@ -127,9 +129,17 @@ function UserView({ token }: { token: string }) {
     } else if (callEvent.type === "call.error") {
       console.error("[User] Call error:", callEvent.error)
       if (callEvent.error === "target_offline") {
-        alert("Master is offline or not connected. Please try again later.")
+        toast({
+          title: "Call Error",
+          description: "Master is offline or not connected. Please try again later.",
+          variant: "destructive",
+        })
       } else {
-        alert(`Call error: ${callEvent.error}`)
+        toast({
+          title: "Call Error",
+          description: callEvent.error || "An error occurred during the call.",
+          variant: "destructive",
+        })
       }
       endCall()
       clearCallEvent()

@@ -11,6 +11,7 @@ import { useSearchParams } from "next/navigation";
 import { useWebRTC } from "@/hooks/use-webrtc";
 import { CallUI } from "@/components/call/call-ui";
 import { Phone } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 function decodeJWT(token: string): Record<string, unknown> | null {
     try {
@@ -104,6 +105,7 @@ function AdminPageInner() {
 function AdminView({ token }: { token: string }) {
     const session = decodeJWT(token);
     const superadminId = session?._id as string | undefined;
+    const { toast } = useToast();
     
     const {
         status,
@@ -125,9 +127,6 @@ function AdminView({ token }: { token: string }) {
         callEvent,
         clearCallEvent,
         searchResults,
-        isSearching,
-        searchChatrooms,
-        clearSearch,
     } = useChatSocket({
         token,
         role: "superadmin" as any,
@@ -146,6 +145,7 @@ function AdminView({ token }: { token: string }) {
     const [chatSearchQuery, setChatSearchQuery] = useState("");
     const [expandedAdmins, setExpandedAdmins] = useState<Set<string>>(new Set());
     const [expandedMasters, setExpandedMasters] = useState<Set<string>>(new Set());
+    const [showSearchResults, setShowSearchResults] = useState(false);
 
     const {
         callState,
@@ -213,9 +213,17 @@ function AdminView({ token }: { token: string }) {
         } else if (callEvent.type === "call.error") {
             console.error("[Master] Call error:", callEvent.error);
             if (callEvent.error === "target_offline") {
-                alert("Target is offline or not connected.");
+                toast({
+                    title: "Call Error",
+                    description: "Target is offline or not connected.",
+                    variant: "destructive",
+                });
             } else {
-                alert(`Call error: ${callEvent.error}`);
+                toast({
+                    title: "Call Error",
+                    description: callEvent.error || "An error occurred during the call.",
+                    variant: "destructive",
+                });
             }
             endCall();
             clearCallEvent();
@@ -430,17 +438,26 @@ function AdminView({ token }: { token: string }) {
                                 <input
                                     type="text"
                                     value={sidebarSearchQuery}
-                                    onChange={(e) => setSidebarSearchQuery(e.target.value)}
-                                    placeholder="Search & press Enter..."
+                                    onChange={(e) => {
+                                        const query = e.target.value;
+                                        setSidebarSearchQuery(query);
+                                        setShowSearchResults(false);
+                                        if (query.trim()) {
+                                            send({ type: "list_chatrooms", search: query.trim(), page: 1, limit: 50 });
+                                        } else {
+                                            setShowSearchResults(false);
+                                        }
+                                    }}
+                                    placeholder="Search..."
                                     className="bg-transparent border-none outline-none text-[#ffffff] dark:text-[#e9edef] text-sm placeholder:text-[#ffffff]/60 dark:placeholder:text-[#8696a0] flex-1 min-w-0"
                                     autoFocus
                                     onKeyDown={(e) => {
-                                        if (e.key === "Enter" && sidebarSearchQuery.trim()) {
-                                            searchChatrooms(sidebarSearchQuery.trim());
-                                        } else if (e.key === "Escape") {
+                                        if (e.key === "Escape") {
                                             setIsSidebarSearchOpen(false);
                                             setSidebarSearchQuery("");
-                                            clearSearch();
+                                            setShowSearchResults(false);
+                                        } else if (e.key === "Enter" && sidebarSearchQuery.trim()) {
+                                            setShowSearchResults(true);
                                         }
                                     }}
                                 />
@@ -448,7 +465,7 @@ function AdminView({ token }: { token: string }) {
                                     onClick={() => {
                                         setIsSidebarSearchOpen(false);
                                         setSidebarSearchQuery("");
-                                        clearSearch();
+                                        setShowSearchResults(false);
                                     }}
                                     className="text-[#ffffff] dark:text-[#8696a0] hover:opacity-80 p-1"
                                     aria-label="Close search"
@@ -499,149 +516,55 @@ function AdminView({ token }: { token: string }) {
                     </header>
 
                     <div className="flex-1 overflow-y-auto">
-                        {isSearching ? (
-                            <div className="p-4 text-center text-sm text-[#667781] dark:text-[#8696a0]">
-                                Searching...
-                            </div>
-                        ) : searchResults ? (
+                        {showSearchResults && searchResults.length > 0 ? (
                             <div className="flex flex-col">
-                                {searchResults.hierarchy.length === 0 ? (
-                                    <div className="p-4 text-center text-sm text-[#667781] dark:text-[#8696a0]">
-                                        No results found for "{searchResults.search}"
-                                    </div>
-                                ) : (
-                                    <>
-                                        <div className="px-4 py-2 bg-[#f0f2f5] dark:bg-[#202c33] text-xs text-[#667781] dark:text-[#8696a0]">
-                                            Found {searchResults.total_count} result(s) for "{searchResults.search}"
-                                        </div>
-                                        {searchResults.hierarchy.map((item: any, idx: number) => {
-                                            if (item.admin) {
-                                                const admin = item.admin;
-                                                return (
-                                                    <div key={admin.id || idx} className="flex flex-col">
-                                                        <div className="w-full flex items-center gap-2 px-4 py-2.5 bg-[#e8f5e9] dark:bg-[#1a3a2a] border-b border-[#e4e6eb] dark:border-[#313d45]">
-                                                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-800 to-green-900 flex items-center justify-center text-white font-medium text-sm">
-                                                                {getInitials(admin.name || admin.userName)}
-                                                            </div>
-                                                            <div className="flex-1 min-w-0 text-left">
-                                                                <h3 className="text-sm font-medium text-[#111b21] dark:text-[#e9edef] truncate">
-                                                                    {admin.name || admin.userName || "Unknown Admin"}
-                                                                </h3>
-                                                                <p className="text-xs text-green-800 dark:text-green-600">Admin</p>
-                                                            </div>
-                                                        </div>
-                                                        {item.masters?.map((masterItem: any) => {
-                                                            const master = masterItem.master;
-                                                            return (
-                                                                <div key={master.id} className="flex flex-col">
-                                                                    <div className="w-full flex items-center gap-2 px-4 py-2.5 pl-8 bg-[#f1f8e9] dark:bg-[#1a2f1a] border-b border-[#e4e6eb] dark:border-[#313d45]">
-                                                                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-green-600 to-green-700 flex items-center justify-center text-white font-medium text-xs">
-                                                                            {getInitials(master.name || master.userName)}
-                                                                        </div>
-                                                                        <div className="flex-1 min-w-0 text-left">
-                                                                            <h3 className="text-sm font-medium text-[#111b21] dark:text-[#e9edef] truncate">
-                                                                                {master.name || master.userName || "Unknown Master"}
-                                                                            </h3>
-                                                                            <p className="text-xs text-green-600 dark:text-green-500">Master</p>
-                                                                        </div>
-                                                                    </div>
-                                                                    {masterItem.clients?.map((client: any) => (
-                                                                        <button
-                                                                            key={client.id}
-                                                                            onClick={() => client.chat_id && handleChatSelect(client.chat_id)}
-                                                                            disabled={!client.chat_id}
-                                                                            className={`w-full flex items-center gap-2 px-4 py-2.5 pl-12 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${chatId === client.chat_id ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""} ${!client.chat_id ? "opacity-50 cursor-not-allowed" : ""}`}
-                                                                        >
-                                                                            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-green-300 to-green-400 flex items-center justify-center text-white font-medium text-xs">
-                                                                                {getInitials(client.name || client.userName)}
-                                                                            </div>
-                                                                            <div className="flex-1 min-w-0 text-left">
-                                                                                <h3 className="text-xs font-medium text-[#111b21] dark:text-[#e9edef] truncate">
-                                                                                    {client.name || client.userName || "Unknown"}
-                                                                                </h3>
-                                                                                <p className="text-xs text-[#667781] dark:text-[#8696a0] truncate">
-                                                                                    {client.phone || "Client"}
-                                                                                </p>
-                                                                            </div>
-                                                                            {!client.chat_id && (
-                                                                                <span className="text-xs text-[#667781] dark:text-[#8696a0]">No chat</span>
-                                                                            )}
-                                                                        </button>
-                                                                    ))}
-                                                                </div>
-                                                            );
-                                                        })}
-                                                    </div>
-                                                );
-                                            } else if (item.master) {
-                                                const master = item.master;
-                                                return (
-                                                    <div key={master.id || idx} className="flex flex-col">
-                                                        <div className="w-full flex items-center gap-2 px-4 py-2.5 bg-[#f1f8e9] dark:bg-[#1a2f1a] border-b border-[#e4e6eb] dark:border-[#313d45]">
-                                                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-600 to-green-700 flex items-center justify-center text-white font-medium text-sm">
-                                                                {getInitials(master.name || master.userName)}
-                                                            </div>
-                                                            <div className="flex-1 min-w-0 text-left">
-                                                                <h3 className="text-sm font-medium text-[#111b21] dark:text-[#e9edef] truncate">
-                                                                    {master.name || master.userName || "Unknown Master"}
-                                                                </h3>
-                                                                <p className="text-xs text-green-600 dark:text-green-500">Master</p>
-                                                            </div>
-                                                        </div>
-                                                        {item.clients?.map((client: any) => (
-                                                            <button
-                                                                key={client.id}
-                                                                onClick={() => client.chat_id && handleChatSelect(client.chat_id)}
-                                                                disabled={!client.chat_id}
-                                                                className={`w-full flex items-center gap-2 px-4 py-2.5 pl-8 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${chatId === client.chat_id ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""} ${!client.chat_id ? "opacity-50 cursor-not-allowed" : ""}`}
-                                                            >
-                                                                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-green-300 to-green-400 flex items-center justify-center text-white font-medium text-xs">
-                                                                    {getInitials(client.name || client.userName)}
-                                                                </div>
-                                                                <div className="flex-1 min-w-0 text-left">
-                                                                    <h3 className="text-xs font-medium text-[#111b21] dark:text-[#e9edef] truncate">
-                                                                        {client.name || client.userName || "Unknown"}
-                                                                    </h3>
-                                                                    <p className="text-xs text-[#667781] dark:text-[#8696a0] truncate">
-                                                                        {client.phone || "Client"}
-                                                                    </p>
-                                                                </div>
-                                                                {!client.chat_id && (
-                                                                    <span className="text-xs text-[#667781] dark:text-[#8696a0]">No chat</span>
-                                                                )}
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                );
-                                            } else {
-                                                const client = item;
-                                                return (
-                                                    <button
-                                                        key={client.id || idx}
-                                                        onClick={() => client.chat_id && handleChatSelect(client.chat_id)}
-                                                        disabled={!client.chat_id}
-                                                        className={`w-full flex items-center gap-2 px-4 py-2.5 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${chatId === client.chat_id ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""} ${!client.chat_id ? "opacity-50 cursor-not-allowed" : ""}`}
-                                                    >
-                                                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-300 to-green-400 flex items-center justify-center text-white font-medium text-sm">
-                                                            {getInitials(client.name || client.userName)}
-                                                        </div>
-                                                        <div className="flex-1 min-w-0 text-left">
-                                                            <h3 className="text-sm font-medium text-[#111b21] dark:text-[#e9edef] truncate">
-                                                                {client.name || client.userName || "Unknown"}
-                                                            </h3>
-                                                            <p className="text-xs text-[#667781] dark:text-[#8696a0] truncate">
-                                                                {client.phone || "Client"}
-                                                            </p>
-                                                        </div>
-                                                        {!client.chat_id && (
-                                                            <span className="text-xs text-[#667781] dark:text-[#8696a0]">No chat</span>
-                                                        )}
-                                                    </button>
-                                                );
-                                            }
-                                        })}
-                                    </>
-                                )}
+                                {searchResults.map((r) => {
+                                    const isSelected = chatId === r.chat_id;
+                                    const name = r.user?.name || r.user?.userName || "Unknown";
+                                    const initials = getInitials(name);
+
+                                    return (
+                                        <button
+                                            key={r.chat_id}
+                                            onClick={() => handleChatSelect(r.chat_id)}
+                                            className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-[#f5f6f6] dark:hover:bg-[#202c33] transition-colors border-b border-[#e4e6eb] dark:border-[#313d45] ${isSelected ? "bg-[#f0f2f5] dark:bg-[#202c33]" : ""
+                                                }`}
+                                        >
+                                            <div className="relative flex-shrink-0">
+                                                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#008069] to-[#006b58] dark:from-[#53bdeb] dark:to-[#008069] flex items-center justify-center text-white font-medium text-lg">
+                                                    {initials}
+                                                </div>
+                                                {r.is_user_active && (
+                                                    <div className="absolute bottom-0 right-0 w-3 h-3 bg-[#53bdeb] border-2 border-white dark:border-[#111b21] rounded-full"></div>
+                                                )}
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center justify-between mb-1">
+                                                    <h3 className="text-base font-medium text-[#111b21] dark:text-[#e9edef] truncate">
+                                                        {name}
+                                                    </h3>
+                                                    <span className="text-xs text-[#667781] dark:text-[#8696a0] flex-shrink-0 ml-2">
+                                                        {formatChatTime(r.updated_time)}
+                                                    </span>
+                                                </div>
+                                                <div className="flex items-center justify-between">
+                                                    <p className="text-sm text-[#667781] dark:text-[#8696a0] truncate">
+                                                        {r.user?.userName ? `@${r.user.userName}` : "No username"}
+                                                    </p>
+                                                    {!r.is_user_active && (
+                                                        <span className="text-xs text-[#667781] dark:text-[#8696a0] flex-shrink-0 ml-2">
+                                                            offline
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        ) : showSearchResults && searchResults.length === 0 && sidebarSearchQuery.trim() ? (
+                            <div className="p-4 text-center text-sm text-[#667781] dark:text-[#8696a0]">
+                                No results found for "{sidebarSearchQuery}"
                             </div>
                         ) : hierarchy ? (
                             <div className="flex flex-col">

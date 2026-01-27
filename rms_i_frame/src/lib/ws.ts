@@ -45,8 +45,7 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
   const [initialPersonalChatrooms, setInitialPersonalChatrooms] = useState<ServerJoinedAdminList["chatrooms"]>([])
   const [messages, setMessages] = useState<ConversationItem[]>([])
   const [callEvent, setCallEvent] = useState<ServerCallIncoming | ServerCallRinging | ServerCallAccepted | ServerCallOffer | ServerCallAnswer | ServerCallIce | ServerCallEnded | ServerCallError | null>(null)
-  const [searchResults, setSearchResults] = useState<any>(null)
-  const [isSearching, setIsSearching] = useState(false)
+  const [searchResults, setSearchResults] = useState<ServerJoinedAdminList["chatrooms"]>([])
   const wsRef = useRef<WebSocket | null>(null)
   const retryRef = useRef(0)
   const keepAliveRef = useRef<NodeJS.Timeout | null>(null)
@@ -199,25 +198,6 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
             }
             return prev
           })
-        } else if (data.type === "chatrooms_list") {
-          console.log("[WS] Received chatrooms_list event:", data)
-          const listData = data as any
-          if (listData.search_type === "hierarchical" && listData.hierarchy) {
-            setSearchResults({
-              hierarchy: listData.hierarchy,
-              search_type: "hierarchical",
-              total_count: listData.pagination?.total_count || 0,
-              search: listData.pagination?.search || "",
-            })
-          } else {
-            setChatrooms(
-              [...(listData.chatrooms || [])].sort(
-                (a: any, b: any) => new Date(b.updated_time).getTime() - new Date(a.updated_time).getTime(),
-              ),
-            )
-            setSearchResults(null)
-          }
-          setIsSearching(false)
         } else if (data.type === "call.incoming") {
           console.log("[WS] Received call.incoming event:", data)
           setCallEvent(data as ServerCallIncoming)
@@ -242,6 +222,66 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
         } else if (data.type === "call.error") {
           console.error("[WS] Received call.error event:", data)
           setCallEvent(data as ServerCallError)
+        } else if (data.type === "chatrooms_list") {
+          const listData = data as any
+          console.log("[WS] Received chatrooms_list event:", listData)
+          
+          if (listData.search_type === "hierarchical" && listData.hierarchy) {
+            const extractedChatrooms: ServerJoinedAdminList["chatrooms"] = []
+            const allAvailableChatrooms = [...chatrooms, ...(listData.chatrooms || [])]
+            
+            if (Array.isArray(listData.hierarchy)) {
+              listData.hierarchy.forEach((adminGroup: any) => {
+                if (adminGroup.masters && Array.isArray(adminGroup.masters)) {
+                  adminGroup.masters.forEach((masterGroup: any) => {
+                    if (masterGroup.clients && Array.isArray(masterGroup.clients)) {
+                      masterGroup.clients.forEach((client: any) => {
+                        const clientId = client.id || client.user_id || ""
+                        if (!clientId) return
+                        
+                        const existingChatroom = allAvailableChatrooms.find(c => 
+                          c.user_id === clientId || c.user_id === String(clientId)
+                        )
+                        
+                        if (existingChatroom) {
+                          extractedChatrooms.push(existingChatroom)
+                        } else {
+                          extractedChatrooms.push({
+                            role: "user",
+                            chat_id: clientId,
+                            user_id: clientId,
+                            is_user_active: false,
+                            is_superadmin_active: false,
+                            updated_time: new Date().toISOString(),
+                            user: {
+                              name: client.name || "",
+                              userName: client.userName || "",
+                              phone: client.phone || "",
+                            },
+                          })
+                        }
+                      })
+                    }
+                  })
+                }
+              })
+            }
+            
+            const sortedChatrooms = extractedChatrooms.sort(
+              (a, b) => (b.user?.name || "").localeCompare(a.user?.name || ""),
+            )
+            setSearchResults(sortedChatrooms)
+            console.log("[WS] Extracted chatrooms from hierarchy:", sortedChatrooms.length)
+          } else {
+            const sortedChatrooms = [...(listData.chatrooms || [])].sort(
+              (a, b) => new Date(b.updated_time).getTime() - new Date(a.updated_time).getTime(),
+            )
+            setSearchResults(sortedChatrooms)
+          }
+          
+          if (listData.hierarchy) {
+            setHierarchy(listData.hierarchy)
+          }
         }
       } catch (err) {
         console.log("[v0] WS parse error:", (err as Error).message)
@@ -328,32 +368,6 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
     setMasters([])
   }, [])
 
-  const lastSearchRef = useRef<string>("")
-
-  const searchChatrooms = useCallback(
-    (searchQuery: string) => {
-      const trimmed = searchQuery.trim()
-      if (!trimmed) {
-        setSearchResults(null)
-        setIsSearching(false)
-        lastSearchRef.current = ""
-        return
-      }
-      if (lastSearchRef.current === trimmed) {
-        return
-      }
-      lastSearchRef.current = trimmed
-      setIsSearching(true)
-      send({ type: "list_chatrooms", search: trimmed, page: 1, limit: 100 })
-    },
-    [send],
-  )
-
-  const clearSearch = useCallback(() => {
-    setSearchResults(null)
-    setIsSearching(false)
-    lastSearchRef.current = ""
-  }, [])
 
   return {
     status,
@@ -376,8 +390,5 @@ export function useChatSocket({ token }: UseChatSocketOptions) {
     callEvent,
     clearCallEvent,
     searchResults,
-    isSearching,
-    searchChatrooms,
-    clearSearch,
   }
 }
