@@ -254,9 +254,11 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
     story.append(Paragraph(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", date_style))
     story.append(Spacer(1, 0.3*inch))
     
-    data = [["Username", "Parent", "Balance", "PnL", "Asset Value"]]
+    # Columns: Username | Parent | Balance | Credit | PnL | Asset Value
+    data = [["Username", "Parent", "Balance", "Credit", "PnL", "Asset Value"]]
     
     total_balance = 0.0
+    total_credit = 0.0
     total_pnl = 0.0
     total_asset_value = 0.0
     
@@ -270,26 +272,34 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
         )
         parent_username = get_parent_username(user_doc)
         balance = float(user_doc.get("balance") or 0)
+        credit = float(user_doc.get("credit") or 0)
         user_id = user_doc.get("_id")
         
         pnl = calculate_user_pnl(user_id)
         asset_value = balance + pnl
         
         total_balance += balance
+        total_credit += credit
         total_pnl += pnl
         total_asset_value += asset_value
         
-        is_minus = pnl < 0
-        text_color = colors.green if is_minus else colors.red
-        
         username_display = username[:5] + "..." if len(username) > 5 else username
         parent_display = (parent_username[:5] + "..." if len(parent_username) > 5 else parent_username) if parent_username != "-" else "-"
+        
+        # Display PnL with explicit + / - prefix
+        if pnl > 0:
+            pnl_display = f"+{pnl:,.2f}"
+        elif pnl < 0:
+            pnl_display = f"-{abs(pnl):,.2f}"
+        else:
+            pnl_display = f"{pnl:,.2f}"
         
         row = [
             username_display,
             parent_display,
             f"{balance:,.2f}",
-            f"{pnl:,.2f}",
+            f"{credit:,.2f}",
+            pnl_display,
             f"{asset_value:,.2f}",
         ]
         data.append(row)
@@ -299,13 +309,31 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
         "TOTAL",
         "-",
         f"{total_balance:,.2f}",
-        f"{total_pnl:,.2f}",
+        f"{total_credit:,.2f}",
+        # Total PnL with explicit + / - prefix
+        (
+            f"+{total_pnl:,.2f}"
+            if total_pnl > 0
+            else f"-{abs(total_pnl):,.2f}"
+            if total_pnl < 0
+            else f"{total_pnl:,.2f}"
+        ),
         f"{total_asset_value:,.2f}",
     ])
     
     # Calculate available width: A4 width (8.27") - left margin (0.3") - right margin (0.3") = 7.67"
-    # Distribute across 5 columns with more space for numeric columns
-    table = Table(data, colWidths=[1.2*inch, 1.2*inch, 1.5*inch, 1.5*inch, 1.5*inch])
+    # Distribute across 6 columns with more space for numeric columns
+    table = Table(
+        data,
+        colWidths=[
+            1.1 * inch,  # Username
+            1.1 * inch,  # Parent
+            1.1 * inch,  # Balance
+            1.1 * inch,  # Credit
+            1.1 * inch,  # PnL
+            1.1 * inch,  # Asset Value
+        ],
+    )
     
     table_style = TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4A4A4A')),
@@ -344,22 +372,29 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
         user_id = user_doc.get("_id")
         pnl = calculate_user_pnl(user_id)
         
-        # If PnL is negative (minus), whole row is green; if positive, whole row is red; if 0, black
-        if pnl < 0:
-            row_color = colors.HexColor('#28a745')  # green
-        elif pnl > 0:
-            row_color = colors.HexColor('#dc3545')  # red
+        # If PnL is positive, whole row is green; if negative, whole row is red; if 0, black
+        if pnl > 0:
+            row_color = colors.HexColor('#28a745')  # green for plus
+        elif pnl < 0:
+            row_color = colors.HexColor('#dc3545')  # red for minus
         else:
             row_color = colors.black  # black for zero
         table_style.add('TEXTCOLOR', (0, i), (-1, i), row_color)
     
     total_balance_color = colors.HexColor('#28a745') if total_balance >= 0 else colors.HexColor('#dc3545')
-    total_pnl_color = colors.HexColor('#28a745') if total_pnl >= 0 else colors.HexColor('#dc3545')
+    total_credit_color = colors.HexColor('#28a745') if total_credit >= 0 else colors.HexColor('#dc3545')
+    if total_pnl > 0:
+        total_pnl_color = colors.HexColor('#28a745')
+    elif total_pnl < 0:
+        total_pnl_color = colors.HexColor('#dc3545')
+    else:
+        total_pnl_color = colors.black
     total_asset_color = colors.HexColor('#28a745') if total_asset_value >= 0 else colors.HexColor('#dc3545')
     
     table_style.add('TEXTCOLOR', (2, total_row_idx), (2, total_row_idx), total_balance_color)
-    table_style.add('TEXTCOLOR', (3, total_row_idx), (3, total_row_idx), total_pnl_color)
-    table_style.add('TEXTCOLOR', (4, total_row_idx), (4, total_row_idx), total_asset_color)
+    table_style.add('TEXTCOLOR', (3, total_row_idx), (3, total_row_idx), total_credit_color)
+    table_style.add('TEXTCOLOR', (4, total_row_idx), (4, total_row_idx), total_pnl_color)
+    table_style.add('TEXTCOLOR', (5, total_row_idx), (5, total_row_idx), total_asset_color)
     
     table.setStyle(table_style)
     story.append(table)
