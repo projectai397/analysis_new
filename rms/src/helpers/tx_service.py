@@ -2,7 +2,7 @@ from typing import Dict, Any, List, Iterable, Tuple
 from datetime import datetime
 from bson import ObjectId
 import heapq
-from ..config import transactions
+from ..config import transactions, users
 
 # ----------------- helpers -----------------
 
@@ -70,6 +70,27 @@ def _id_str_safe(d: Dict[str, Any]) -> str:
     _id = d.get("_id")
     return str(_id) if _id is not None else ""
 
+def _user_name_map(user_ids: List[Any]) -> Dict[Any, str]:
+    if users is None or not user_ids:
+        return {}
+    oids = []
+    for uid in user_ids:
+        if uid is None:
+            continue
+        try:
+            oids.append(uid if isinstance(uid, ObjectId) else ObjectId(uid))
+        except Exception:
+            pass
+    if not oids:
+        return {}
+    out: Dict[Any, str] = {}
+    for doc in users.find({"_id": {"$in": oids}}, {"_id": 1, "name": 1, "userName": 1, "username": 1}):
+        oid = doc.get("_id")
+        name = (doc.get("userName") or doc.get("name") or doc.get("username") or "")
+        out[oid] = name
+        out[str(oid)] = name
+    return out
+
 # ----------------- overall summary -----------------
 
 def overall_transactions_for_users(user_ids: List[ObjectId], start: datetime, end: datetime) -> Dict[str, Any]:
@@ -121,7 +142,11 @@ def top_biggest_deposits(limit: int, user_ids: List[ObjectId], start: datetime, 
             heapq.heappop(top)
 
     top_sorted = sorted(top, key=lambda x: (x[0], x[1], x[2]), reverse=True)
-    return [_format_tx_doc(d) for _, _, _, d in top_sorted]
+    rows = [_format_tx_doc(d) for _, _, _, d in top_sorted]
+    name_map = _user_name_map([r["user_id"] for r in rows])
+    for r in rows:
+        r["userName"] = name_map.get(r["user_id"]) or ""
+    return rows
 
 # ----------------- top-N withdrawals -----------------
 
@@ -141,4 +166,8 @@ def top_biggest_withdrawals(limit: int, user_ids: List[ObjectId], start: datetim
             heapq.heappop(top)
 
     top_sorted = sorted(top, key=lambda x: (x[0], x[1], x[2]), reverse=True)
-    return [_format_tx_doc(d) for _, _, _, d in top_sorted]
+    rows = [_format_tx_doc(d) for _, _, _, d in top_sorted]
+    name_map = _user_name_map([r["user_id"] for r in rows])
+    for r in rows:
+        r["userName"] = name_map.get(r["user_id"]) or ""
+    return rows

@@ -44,7 +44,7 @@ def _get_balance(user_id: ObjectId) -> float:
     return _f(doc.get("balance")) if doc else 0.0
 
 def _user_name_map(user_ids: List[Any]) -> Dict[Any, str]:
-    if not users or not user_ids:
+    if users is None or not user_ids:
         return {}
     oids = []
     for uid in user_ids:
