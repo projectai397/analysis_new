@@ -254,8 +254,8 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
     story.append(Paragraph(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", date_style))
     story.append(Spacer(1, 0.3*inch))
     
-    # Columns: Username | Parent | Balance | Credit | PnL | Asset Value
-    data = [["Username", "Parent", "Balance", "Credit", "PnL", "Asset Value"]]
+    # Columns: Username | Parent | Balance | PnL | Asset Value | Credit
+    data = [["Username", "Parent", "Balance", "PnL", "Asset Value", "Credit"]]
     
     total_balance = 0.0
     total_credit = 0.0
@@ -298,9 +298,9 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
             username_display,
             parent_display,
             f"{balance:,.2f}",
-            f"{credit:,.2f}",
             pnl_display,
             f"{asset_value:,.2f}",
+            f"{credit:,.2f}",
         ]
         data.append(row)
     
@@ -309,7 +309,6 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
         "TOTAL",
         "-",
         f"{total_balance:,.2f}",
-        f"{total_credit:,.2f}",
         # Total PnL with explicit + / - prefix
         (
             f"+{total_pnl:,.2f}"
@@ -319,6 +318,7 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
             else f"{total_pnl:,.2f}"
         ),
         f"{total_asset_value:,.2f}",
+        f"{total_credit:,.2f}",
     ])
     
     # Calculate available width: A4 width (8.27") - left margin (0.3") - right margin (0.3") = 7.67"
@@ -329,9 +329,9 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
             1.1 * inch,  # Username
             1.1 * inch,  # Parent
             1.1 * inch,  # Balance
-            1.1 * inch,  # Credit
             1.1 * inch,  # PnL
             1.1 * inch,  # Asset Value
+            1.1 * inch,  # Credit
         ],
     )
     
@@ -370,31 +370,33 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
     for i in range(1, len(data) - 1):
         user_doc = user_data_list[i - 1]
         user_id = user_doc.get("_id")
+        balance = float(user_doc.get("balance") or 0)
         pnl = calculate_user_pnl(user_id)
+        asset_value = balance + pnl
         
-        # If PnL is positive, whole row is green; if negative, whole row is red; if 0, black
-        if pnl > 0:
-            row_color = colors.HexColor('#28a745')  # green for plus
-        elif pnl < 0:
-            row_color = colors.HexColor('#dc3545')  # red for minus
+        # Row color by Asset Value: + green, - red, 0 black
+        if asset_value > 0:
+            row_color = colors.HexColor('#28a745')  # green
+        elif asset_value < 0:
+            row_color = colors.HexColor('#dc3545')  # red
         else:
             row_color = colors.black  # black for zero
         table_style.add('TEXTCOLOR', (0, i), (-1, i), row_color)
     
     total_balance_color = colors.HexColor('#28a745') if total_balance >= 0 else colors.HexColor('#dc3545')
-    total_credit_color = colors.HexColor('#28a745') if total_credit >= 0 else colors.HexColor('#dc3545')
     if total_pnl > 0:
         total_pnl_color = colors.HexColor('#28a745')
     elif total_pnl < 0:
         total_pnl_color = colors.HexColor('#dc3545')
     else:
         total_pnl_color = colors.black
-    total_asset_color = colors.HexColor('#28a745') if total_asset_value >= 0 else colors.HexColor('#dc3545')
+    total_asset_color = colors.HexColor('#28a745') if total_asset_value > 0 else (colors.HexColor('#dc3545') if total_asset_value < 0 else colors.black)
+    total_credit_color = colors.HexColor('#28a745') if total_credit >= 0 else colors.HexColor('#dc3545')
     
     table_style.add('TEXTCOLOR', (2, total_row_idx), (2, total_row_idx), total_balance_color)
-    table_style.add('TEXTCOLOR', (3, total_row_idx), (3, total_row_idx), total_credit_color)
-    table_style.add('TEXTCOLOR', (4, total_row_idx), (4, total_row_idx), total_pnl_color)
-    table_style.add('TEXTCOLOR', (5, total_row_idx), (5, total_row_idx), total_asset_color)
+    table_style.add('TEXTCOLOR', (3, total_row_idx), (3, total_row_idx), total_pnl_color)
+    table_style.add('TEXTCOLOR', (4, total_row_idx), (4, total_row_idx), total_asset_color)
+    table_style.add('TEXTCOLOR', (5, total_row_idx), (5, total_row_idx), total_credit_color)
     
     table.setStyle(table_style)
     story.append(table)
