@@ -1,0 +1,463 @@
+2026-01-19 16:56:30,387 - websoket_hindi_db.tts.tts_websocket - WARNING - Voice reference file not found: data/saved_voices/refe2_fast_trimmed1.wav
+2026-01-19 16:56:30,387 - __main__ - ERROR - ❌ openai package missing. Install: pip install openai
+2026-01-19 16:57:09,021 - websoket_hindi_db.tts.tts_websocket - WARNING - Voice reference file not found: data/saved_voices/refe2_fast_trimmed1.wav
+2026-01-19 16:57:09,394 - __main__ - INFO - Mongo FAQ loaded: 39 items from pro_analysis.FAQs_hindi
+2026-01-19 16:57:09,395 - websoket_hindi_db.tts.tts_websocket - INFO - 🔗 Connecting to TTS WebSocket...
+2026-01-19 16:57:10,281 - websoket_hindi_db.tts.tts_websocket - INFO - ✅ TTS WebSocket connected
+2026-01-19 16:57:10,281 - websoket_hindi_db.stt.stt_websocket - INFO - 🔗 Connecting to STT WebSocket...
+2026-01-19 16:57:10,958 - websoket_hindi_db.stt.stt_websocket - INFO - ✅ STT WebSocket connected
+2026-01-19 16:58:34,006 - websockets.server - ERROR - connection handler failed
+TimeoutError: timed out while closing connection
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Info\Desktop\cr\analysis_new\rms\venv\Lib\site-packages\websockets\asyncio\server.py", line 376, in conn_handler
+    await self.handler(connection)
+  File "C:\Users\Info\Desktop\cr\analysis_new\rms\src\websoket_hindi_db\demo_trading.py", line 1582, in handler
+    async for raw in ws:
+    ...<52 lines>...
+            continue
+  File "C:\Users\Info\Desktop\cr\analysis_new\rms\venv\Lib\site-packages\websockets\asyncio\connection.py", line 244, in __aiter__
+    yield await self.recv()
+          ^^^^^^^^^^^^^^^^^
+  File "C:\Users\Info\Desktop\cr\analysis_new\rms\venv\Lib\site-packages\websockets\asyncio\connection.py", line 324, in recv
+    raise self.protocol.close_exc from self.recv_exc
+websockets.exceptions.ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received
+2026-01-19 17:03:09,719 - websoket_hindi_db.tts.tts_websocket - WARNING - Voice reference file not found: data/saved_voices/refe2_fast_trimmed1.wav
+2026-01-19 17:03:10,122 - __main__ - INFO - Mongo FAQ loaded: 39 items from pro_analysis.FAQs_hindi
+2026-01-19 17:03:10,123 - websoket_hindi_db.tts.tts_websocket - INFO - 🔗 Connecting to TTS WebSocket...
+2026-01-19 17:03:10,890 - websoket_hindi_db.tts.tts_websocket - INFO - ✅ TTS WebSocket connected
+2026-01-19 17:03:10,890 - websoket_hindi_db.stt.stt_websocket - INFO - 🔗 Connecting to STT WebSocket...
+2026-01-19 17:03:11,621 - websoket_hindi_db.stt.stt_websocket - INFO - ✅ STT WebSocket connected
+2026-01-19 17:03:11,621 - __main__ - INFO - BOT signaling server starting on ws://0.0.0.0:8765
+2026-01-19 17:03:11,623 - __main__ - INFO - BOT signaling server is running
+2026-01-19 17:03:27,584 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 54644)
+2026-01-19 17:03:40,461 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 51701)
+2026-01-19 17:04:30,498 - __main__ - INFO - [BOT SERVER] Connection closed normally
+2026-01-19 18:04:45,675 - websoket_hindi_db.tts.tts_websocket - WARNING - Voice reference file not found: data/saved_voices/refe2_fast_trimmed1.wav
+2026-01-19 18:04:46,068 - __main__ - INFO - Mongo FAQ loaded: 39 items from pro_analysis.FAQs_hindi
+2026-01-19 18:04:46,069 - websoket_hindi_db.tts.tts_websocket - INFO - 🔗 Connecting to TTS WebSocket...
+2026-01-19 18:04:46,863 - websoket_hindi_db.tts.tts_websocket - INFO - ✅ TTS WebSocket connected
+2026-01-19 18:04:46,863 - websoket_hindi_db.stt.stt_websocket - INFO - 🔗 Connecting to STT WebSocket...
+2026-01-19 18:04:47,555 - websoket_hindi_db.stt.stt_websocket - INFO - ✅ STT WebSocket connected
+2026-01-19 18:04:47,555 - __main__ - INFO - BOT signaling server starting on ws://0.0.0.0:8765
+2026-01-19 18:04:47,557 - __main__ - INFO - BOT signaling server is running
+2026-01-19 18:05:07,724 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 54447)
+2026-01-19 18:05:32,358 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 62814)
+2026-01-19 18:05:32,424 - __main__ - INFO - [BOT SERVER] Received message: offer, call_id: 7562c4bfff974b0ca56f6651c91cbb10
+2026-01-19 18:05:32,425 - __main__ - INFO - [BOT SERVER] Processing offer for call_id: 7562c4bfff974b0ca56f6651c91cbb10
+2026-01-19 18:05:32,620 - __main__ - INFO - [BOT SERVER] Created new WebRTC session for call_id: 7562c4bfff974b0ca56f6651c91cbb10
+2026-01-19 18:05:32,620 - __main__ - INFO - [BOT SERVER] Setting remote description...
+2026-01-19 18:05:32,620 - __main__ - ERROR - [BOT SERVER] Error processing offer: 'dict' object has no attribute 'splitlines'
+Traceback (most recent call last):
+  File "C:\Users\Info\Desktop\cr\analysis_new\rms\src\websoket_hindi_db\demo_trading.py", line 1643, in handler
+    await sess.pc.setRemoteDescription(RTCSessionDescription(sdp=offer_sdp, type="offer"))
+  File "C:\Users\Info\Desktop\cr\analysis_new\rms\venv\Lib\site-packages\aiortc\rtcpeerconnection.py", line 878, in setRemoteDescription
+    description = sdp.SessionDescription.parse(sessionDescription.sdp)
+  File "C:\Users\Info\Desktop\cr\analysis_new\rms\venv\Lib\site-packages\aiortc\sdp.py", line 390, in parse
+    session_lines, media_groups = grouplines(sdp)
+                                  ~~~~~~~~~~^^^^^
+  File "C:\Users\Info\Desktop\cr\analysis_new\rms\venv\Lib\site-packages\aiortc\sdp.py", line 141, in grouplines
+    for line in sdp.splitlines():
+                ^^^^^^^^^^^^^^
+AttributeError: 'dict' object has no attribute 'splitlines'
+2026-01-19 18:05:32,637 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 7562c4bfff974b0ca56f6651c91cbb10
+2026-01-19 18:05:37,646 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 63126)
+2026-01-19 18:05:37,647 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 7562c4bfff974b0ca56f6651c91cbb10
+2026-01-19 18:05:42,660 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 49365)
+2026-01-19 18:05:42,661 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 7562c4bfff974b0ca56f6651c91cbb10
+2026-01-19 18:05:47,682 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 61493)
+2026-01-19 18:05:47,683 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 7562c4bfff974b0ca56f6651c91cbb10
+2026-01-19 18:05:52,687 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 65215)
+2026-01-19 18:05:52,687 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 7562c4bfff974b0ca56f6651c91cbb10
+2026-01-19 18:05:57,709 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 63626)
+2026-01-19 18:05:57,710 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 7562c4bfff974b0ca56f6651c91cbb10
+2026-01-19 18:06:02,733 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 54828)
+2026-01-19 18:06:02,734 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 7562c4bfff974b0ca56f6651c91cbb10
+2026-01-19 18:06:07,757 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 58279)
+2026-01-19 18:06:07,758 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 7562c4bfff974b0ca56f6651c91cbb10
+2026-01-19 18:06:12,779 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 63130)
+2026-01-19 18:06:12,780 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 7562c4bfff974b0ca56f6651c91cbb10
+2026-01-19 18:06:17,796 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 59269)
+2026-01-19 18:06:17,797 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 7562c4bfff974b0ca56f6651c91cbb10
+2026-01-19 18:06:22,817 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 54330)
+2026-01-19 18:06:22,818 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 7562c4bfff974b0ca56f6651c91cbb10
+2026-01-19 18:09:33,505 - websoket_hindi_db.tts.tts_websocket - WARNING - Voice reference file not found: data/saved_voices/refe2_fast_trimmed1.wav
+2026-01-19 18:09:33,875 - __main__ - INFO - Mongo FAQ loaded: 39 items from pro_analysis.FAQs_hindi
+2026-01-19 18:09:33,875 - websoket_hindi_db.tts.tts_websocket - INFO - 🔗 Connecting to TTS WebSocket...
+2026-01-19 18:09:34,566 - websoket_hindi_db.tts.tts_websocket - INFO - ✅ TTS WebSocket connected
+2026-01-19 18:09:34,567 - websoket_hindi_db.stt.stt_websocket - INFO - 🔗 Connecting to STT WebSocket...
+2026-01-19 18:09:35,324 - websoket_hindi_db.stt.stt_websocket - INFO - ✅ STT WebSocket connected
+2026-01-19 18:09:35,325 - __main__ - INFO - BOT signaling server starting on ws://0.0.0.0:8765
+2026-01-19 18:09:35,326 - __main__ - INFO - BOT signaling server is running
+2026-01-19 18:09:44,135 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 60136)
+2026-01-19 18:10:03,987 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 62777)
+2026-01-19 18:10:04,050 - __main__ - INFO - [BOT SERVER] Received message: offer, call_id: d77b3dad0ce14453829c2d3407cb63cb
+2026-01-19 18:10:04,051 - __main__ - INFO - [BOT SERVER] Processing offer for call_id: d77b3dad0ce14453829c2d3407cb63cb
+2026-01-19 18:10:04,056 - __main__ - INFO - [BOT SERVER] Created new WebRTC session for call_id: d77b3dad0ce14453829c2d3407cb63cb
+2026-01-19 18:10:04,056 - __main__ - INFO - [BOT SERVER] Setting remote description... (SDP length: 1295)
+2026-01-19 18:10:04,057 - __main__ - INFO - [BOT SERVER] Audio track received for call_id: d77b3dad0ce14453829c2d3407cb63cb
+2026-01-19 18:10:04,058 - __main__ - INFO - [BOT SERVER] Creating answer...
+2026-01-19 18:10:04,062 - __main__ - INFO - TTS input length: 68 chars
+2026-01-19 18:10:04,062 - websoket_hindi_db.tts.tts_websocket - INFO - Starting streaming TTS (Prompt ID: 1000)
+2026-01-19 18:10:04,062 - websoket_hindi_db.tts.tts_websocket - INFO - 🎤 TTS [HI] Input: 68 chars
+2026-01-19 18:10:04,062 - websoket_hindi_db.tts.tts_websocket - INFO - 🔤 Using model: xtts
+2026-01-19 18:10:04,070 - aioice.ice - INFO - Connection(0) Could not bind to 169.254.226.197 - [WinError 10049] The requested address is not valid in its context
+2026-01-19 18:10:04,071 - aioice.ice - INFO - Connection(0) Could not bind to 169.254.159.173 - [WinError 10049] The requested address is not valid in its context
+2026-01-19 18:10:04,071 - aioice.ice - INFO - Connection(0) Could not bind to 169.254.36.12 - [WinError 10049] The requested address is not valid in its context
+2026-01-19 18:10:04,071 - aioice.ice - INFO - Connection(0) Could not bind to 169.254.202.251 - [WinError 10049] The requested address is not valid in its context
+2026-01-19 18:10:05,703 - websoket_hindi_db.tts.tts_websocket - INFO - Audio sample rate: 24000Hz
+2026-01-19 18:10:05,704 - websoket_hindi_db.tts.tts_websocket - INFO - Audio received in 1.642s, size: 300.1KB, 24000Hz
+2026-01-19 18:10:05,704 - websoket_hindi_db.tts.tts_websocket - INFO - Resampling from 24000Hz to 16000Hz
+2026-01-19 18:10:05,725 - websoket_hindi_db.tts.tts_websocket - INFO - Resampled to 102425 samples at 16000Hz
+2026-01-19 18:10:05,726 - websoket_hindi_db.tts.tts_websocket - INFO - TTS successful: 1.642s, 300.1KB audio, 13 chunks
+2026-01-19 18:10:09,082 - __main__ - INFO - [BOT SERVER] Answer created, sending to Flask server
+2026-01-19 18:10:09,083 - __main__ - INFO - [BOT SERVER] ✅ Answer sent for call_id: d77b3dad0ce14453829c2d3407cb63cb
+2026-01-19 18:10:09,087 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: d77b3dad0ce14453829c2d3407cb63cb
+2026-01-19 18:10:14,107 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 50096)
+2026-01-19 18:10:14,108 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: d77b3dad0ce14453829c2d3407cb63cb
+2026-01-19 18:10:19,135 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 53954)
+2026-01-19 18:10:19,136 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: d77b3dad0ce14453829c2d3407cb63cb
+2026-01-19 18:10:24,153 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 52224)
+2026-01-19 18:10:24,153 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: d77b3dad0ce14453829c2d3407cb63cb
+2026-01-19 18:10:29,180 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 54270)
+2026-01-19 18:10:29,180 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: d77b3dad0ce14453829c2d3407cb63cb
+2026-01-19 18:10:34,196 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 55986)
+2026-01-19 18:10:34,197 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: d77b3dad0ce14453829c2d3407cb63cb
+2026-01-19 18:10:39,218 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 50064)
+2026-01-19 18:10:39,219 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: d77b3dad0ce14453829c2d3407cb63cb
+2026-01-19 18:10:44,240 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 53772)
+2026-01-19 18:10:44,241 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: d77b3dad0ce14453829c2d3407cb63cb
+2026-01-19 18:10:49,254 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 60998)
+2026-01-19 18:10:49,254 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: d77b3dad0ce14453829c2d3407cb63cb
+2026-01-19 18:10:54,280 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 60223)
+2026-01-19 18:10:54,281 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: d77b3dad0ce14453829c2d3407cb63cb
+2026-01-19 18:10:59,285 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 59694)
+2026-01-19 18:10:59,286 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: d77b3dad0ce14453829c2d3407cb63cb
+2026-01-19 18:15:32,136 - websoket_hindi_db.tts.tts_websocket - WARNING - Voice reference file not found: data/saved_voices/refe2_fast_trimmed1.wav
+2026-01-19 18:15:32,493 - __main__ - INFO - Mongo FAQ loaded: 39 items from pro_analysis.FAQs_hindi
+2026-01-19 18:15:32,493 - websoket_hindi_db.tts.tts_websocket - INFO - 🔗 Connecting to TTS WebSocket...
+2026-01-19 18:15:33,284 - websoket_hindi_db.tts.tts_websocket - INFO - ✅ TTS WebSocket connected
+2026-01-19 18:15:33,284 - websoket_hindi_db.stt.stt_websocket - INFO - 🔗 Connecting to STT WebSocket...
+2026-01-19 18:15:34,001 - websoket_hindi_db.stt.stt_websocket - INFO - ✅ STT WebSocket connected
+2026-01-19 18:15:34,001 - __main__ - INFO - BOT signaling server starting on ws://0.0.0.0:8765
+2026-01-19 18:15:34,003 - __main__ - INFO - BOT signaling server is running
+2026-01-19 18:15:42,093 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 61365)
+2026-01-19 18:20:17,515 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 54392)
+2026-01-19 18:20:17,574 - __main__ - INFO - [BOT SERVER] Received message: offer, call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:17,574 - __main__ - INFO - [BOT SERVER] Processing offer for call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:17,581 - __main__ - INFO - [BOT SERVER] Created new WebRTC session for call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:17,581 - __main__ - INFO - [BOT SERVER] Setting remote description... (SDP length: 1295)
+2026-01-19 18:20:17,582 - __main__ - INFO - [BOT SERVER] Audio track received for call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:17,582 - __main__ - INFO - [BOT SERVER] Creating answer...
+2026-01-19 18:20:17,583 - __main__ - INFO - [BOT SESSION] Starting to handle incoming track for call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:17,590 - aioice.ice - INFO - Connection(0) Could not bind to 169.254.226.197 - [WinError 10049] The requested address is not valid in its context
+2026-01-19 18:20:17,590 - aioice.ice - INFO - Connection(0) Could not bind to 169.254.159.173 - [WinError 10049] The requested address is not valid in its context
+2026-01-19 18:20:17,590 - aioice.ice - INFO - Connection(0) Could not bind to 169.254.36.12 - [WinError 10049] The requested address is not valid in its context
+2026-01-19 18:20:17,591 - aioice.ice - INFO - Connection(0) Could not bind to 169.254.202.251 - [WinError 10049] The requested address is not valid in its context
+2026-01-19 18:20:18,085 - __main__ - WARNING - [BOT SESSION] Connection not ready (state: new), waiting...
+2026-01-19 18:20:21,373 - __main__ - INFO - [BOT SESSION] Speaking greeting (connection state: new)
+2026-01-19 18:20:21,374 - __main__ - INFO - [BOT SESSION] _speak_text_into_call: 'मास्टर अभी व्यस्त हैं। मैं आपकी मदद करूँगा। कृपया ...' (connection: new)
+2026-01-19 18:20:21,375 - __main__ - INFO - TTS input length: 68 chars
+2026-01-19 18:20:21,375 - websoket_hindi_db.tts.tts_websocket - INFO - Starting streaming TTS (Prompt ID: 1000)
+2026-01-19 18:20:21,376 - websoket_hindi_db.tts.tts_websocket - INFO - 🎤 TTS [HI] Input: 68 chars
+2026-01-19 18:20:21,376 - websoket_hindi_db.tts.tts_websocket - INFO - 🔤 Using model: xtts
+2026-01-19 18:20:22,597 - __main__ - INFO - [BOT SERVER] Answer created, sending to Flask server
+2026-01-19 18:20:22,598 - __main__ - INFO - [BOT SERVER] ✅ Answer sent for call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,598 - __main__ - INFO - [BOT SESSION] Connection state changed: connecting for call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,601 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,601 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,601 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.1.6:49263 (host)
+2026-01-19 18:20:22,602 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,602 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,603 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.224.1:49264 (host)
+2026-01-19 18:20:22,604 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,604 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,604 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.56.1:49265 (host)
+2026-01-19 18:20:22,605 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,605 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,606 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3:49266 (host)
+2026-01-19 18:20:22,607 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,607 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,607 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2:49267 (host)
+2026-01-19 18:20:22,609 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,609 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,609 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 122.170.166.232:49263 (srflx)
+2026-01-19 18:20:22,611 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,611 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,611 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.1.6:9 (host)
+2026-01-19 18:20:22,614 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,614 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,615 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.224.1:9 (host)
+2026-01-19 18:20:22,618 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,618 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,618 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.56.1:9 (host)
+2026-01-19 18:20:22,618 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 49269) -> ('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 49266)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:20:22,620 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,620 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,620 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3:9 (host)
+2026-01-19 18:20:22,622 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,622 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 19bc77ba9e1b4c5d97aebf88c7cca2f8
+2026-01-19 18:20:22,622 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2:9 (host)
+2026-01-19 18:20:22,644 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 49270) -> ('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 49266)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:20:22,674 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 49269) -> ('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 49267)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:20:22,706 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 49270) -> ('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 49267)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:20:22,739 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 49268) -> ('192.168.1.6', 49263)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:20:22,769 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 49271) -> ('192.168.1.6', 49263)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:20:22,770 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 49271) -> ('192.168.1.6', 49263)) State.IN_PROGRESS -> State.SUCCEEDED
+2026-01-19 18:20:22,770 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 49271) -> ('192.168.224.1', 49264)) State.FROZEN -> State.WAITING
+2026-01-19 18:20:22,770 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 49271) -> ('192.168.56.1', 49265)) State.FROZEN -> State.WAITING
+2026-01-19 18:20:22,770 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 49271) -> ('122.170.166.232', 49263)) State.FROZEN -> State.WAITING
+2026-01-19 18:20:22,800 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 49271) -> ('192.168.224.1', 49264)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:20:22,832 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 49271) -> ('192.168.56.1', 49265)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:20:22,862 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 49271) -> ('122.170.166.232', 49263)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:20:22,893 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 49272) -> ('192.168.1.6', 49263)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:20:22,925 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 49268) -> ('192.168.224.1', 49264)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:20:22,951 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 49272) -> ('192.168.224.1', 49264)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:20:22,953 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 49272) -> ('192.168.224.1', 49264)) State.IN_PROGRESS -> State.SUCCEEDED
+2026-01-19 18:20:22,953 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 49272) -> ('192.168.56.1', 49265)) State.FROZEN -> State.WAITING
+2026-01-19 18:20:22,953 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 49272) -> ('122.170.166.232', 49263)) State.FROZEN -> State.WAITING
+2026-01-19 18:20:22,972 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 49272) -> ('192.168.56.1', 49265)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:20:23,004 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 49272) -> ('122.170.166.232', 49263)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:20:23,035 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 49268) -> ('192.168.56.1', 49265)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:20:23,036 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 49268) -> ('192.168.56.1', 49265)) State.IN_PROGRESS -> State.SUCCEEDED
+2026-01-19 18:20:23,036 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 49268) -> ('122.170.166.232', 49263)) State.FROZEN -> State.WAITING
+2026-01-19 18:20:23,057 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 49268) -> ('122.170.166.232', 49263)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:20:23,097 - websoket_hindi_db.tts.tts_websocket - INFO - Audio sample rate: 24000Hz
+2026-01-19 18:20:23,097 - websoket_hindi_db.tts.tts_websocket - INFO - Audio received in 1.722s, size: 317.6KB, 24000Hz
+2026-01-19 18:20:23,098 - websoket_hindi_db.tts.tts_websocket - INFO - Resampling from 24000Hz to 16000Hz
+2026-01-19 18:20:23,117 - websoket_hindi_db.tts.tts_websocket - INFO - Resampled to 108398 samples at 16000Hz
+2026-01-19 18:20:23,117 - websoket_hindi_db.tts.tts_websocket - INFO - TTS successful: 1.722s, 317.6KB audio, 14 chunks
+2026-01-19 18:20:23,117 - __main__ - INFO - [BOT SESSION] Pushing 108398 samples to out_track (SR: 24000)
+2026-01-19 18:20:23,121 - __main__ - INFO - [BOT SESSION] ✅ Audio pushed to out_track
+2026-01-19 18:20:23,122 - __main__ - INFO - [BOT SESSION] Greeting sent
+2026-01-19 18:34:06,057 - websoket_hindi_db.tts.tts_websocket - WARNING - Voice reference file not found: data/saved_voices/refe2_fast_trimmed1.wav
+2026-01-19 18:34:06,427 - __main__ - INFO - Mongo FAQ loaded: 39 items from pro_analysis.FAQs_hindi
+2026-01-19 18:34:06,427 - websoket_hindi_db.tts.tts_websocket - INFO - 🔗 Connecting to TTS WebSocket...
+2026-01-19 18:34:07,220 - websoket_hindi_db.tts.tts_websocket - INFO - ✅ TTS WebSocket connected
+2026-01-19 18:34:07,220 - websoket_hindi_db.stt.stt_websocket - INFO - 🔗 Connecting to STT WebSocket...
+2026-01-19 18:34:07,899 - websoket_hindi_db.stt.stt_websocket - INFO - ✅ STT WebSocket connected
+2026-01-19 18:34:07,899 - __main__ - INFO - BOT signaling server starting on ws://0.0.0.0:8765
+2026-01-19 18:34:07,901 - __main__ - INFO - BOT signaling server is running
+2026-01-19 18:34:11,599 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 50522)
+2026-01-19 18:34:25,013 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 64145)
+2026-01-19 18:34:25,074 - __main__ - INFO - [BOT SERVER] Received message: offer, call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:25,075 - __main__ - INFO - [BOT SERVER] Processing offer for call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:25,082 - __main__ - INFO - [BOT SERVER] Created new WebRTC session for call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:25,082 - __main__ - INFO - [BOT SERVER] Setting remote description... (SDP length: 1293)
+2026-01-19 18:34:25,083 - __main__ - INFO - [BOT SERVER] Audio track received for call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:25,083 - __main__ - INFO - [BOT SERVER] Creating answer...
+2026-01-19 18:34:25,084 - __main__ - INFO - [BOT SESSION] Starting to handle incoming track for call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:25,091 - aioice.ice - INFO - Connection(0) Could not bind to 169.254.226.197 - [WinError 10049] The requested address is not valid in its context
+2026-01-19 18:34:25,091 - aioice.ice - INFO - Connection(0) Could not bind to 169.254.159.173 - [WinError 10049] The requested address is not valid in its context
+2026-01-19 18:34:25,092 - aioice.ice - INFO - Connection(0) Could not bind to 169.254.36.12 - [WinError 10049] The requested address is not valid in its context
+2026-01-19 18:34:25,092 - aioice.ice - INFO - Connection(0) Could not bind to 169.254.202.251 - [WinError 10049] The requested address is not valid in its context
+2026-01-19 18:34:25,595 - __main__ - WARNING - [BOT SESSION] Connection not ready (state: new), waiting...
+2026-01-19 18:34:28,867 - __main__ - INFO - [BOT SESSION] Speaking greeting (connection state: new)
+2026-01-19 18:34:28,867 - __main__ - INFO - [BOT SESSION] _speak_text_into_call: 'मास्टर अभी व्यस्त हैं। मैं आपकी मदद करूँगा। कृपया ...' (connection: new)
+2026-01-19 18:34:28,869 - __main__ - INFO - TTS input length: 68 chars
+2026-01-19 18:34:28,869 - websoket_hindi_db.tts.tts_websocket - INFO - Starting streaming TTS (Prompt ID: 1000)
+2026-01-19 18:34:28,869 - websoket_hindi_db.tts.tts_websocket - INFO - 🎤 TTS [HI] Input: 68 chars
+2026-01-19 18:34:28,869 - websoket_hindi_db.tts.tts_websocket - INFO - 🔤 Using model: xtts
+2026-01-19 18:34:30,093 - __main__ - INFO - [BOT SERVER] Answer created, sending to Flask server
+2026-01-19 18:34:30,094 - __main__ - INFO - [BOT SERVER] ✅ Answer sent for call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,094 - __main__ - INFO - [BOT SESSION] Connection state changed: connecting for call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,096 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,097 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,097 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.1.6:54996 (host)
+2026-01-19 18:34:30,098 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,098 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,098 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.224.1:54997 (host)
+2026-01-19 18:34:30,100 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,100 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,100 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.56.1:54998 (host)
+2026-01-19 18:34:30,101 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,101 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,101 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3:54999 (host)
+2026-01-19 18:34:30,103 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,103 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,103 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2:55000 (host)
+2026-01-19 18:34:30,105 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,105 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,105 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 122.170.166.232:54996 (srflx)
+2026-01-19 18:34:30,106 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,106 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,106 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.1.6:9 (host)
+2026-01-19 18:34:30,108 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,108 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,108 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.224.1:9 (host)
+2026-01-19 18:34:30,109 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,110 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,110 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.56.1:9 (host)
+2026-01-19 18:34:30,111 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,111 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,112 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3:9 (host)
+2026-01-19 18:34:30,113 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,114 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: bd2bd36b1203447486a7d6bada337376
+2026-01-19 18:34:30,114 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2:9 (host)
+2026-01-19 18:34:30,123 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 58345) -> ('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 54999)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:34:30,154 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 58346) -> ('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 54999)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:34:30,186 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 58345) -> ('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 55000)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:34:30,218 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 58346) -> ('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 55000)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:34:30,244 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 58344) -> ('192.168.1.6', 54996)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:34:30,267 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 58347) -> ('192.168.1.6', 54996)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:34:30,268 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 58347) -> ('192.168.1.6', 54996)) State.IN_PROGRESS -> State.SUCCEEDED
+2026-01-19 18:34:30,268 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 58347) -> ('192.168.224.1', 54997)) State.FROZEN -> State.WAITING
+2026-01-19 18:34:30,268 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 58347) -> ('192.168.56.1', 54998)) State.FROZEN -> State.WAITING
+2026-01-19 18:34:30,268 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 58347) -> ('122.170.166.232', 54996)) State.FROZEN -> State.WAITING
+2026-01-19 18:34:30,298 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 58347) -> ('192.168.224.1', 54997)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:34:30,328 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 58347) -> ('192.168.56.1', 54998)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:34:30,358 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 58347) -> ('122.170.166.232', 54996)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:34:30,390 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 58348) -> ('192.168.1.6', 54996)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:34:30,421 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 58344) -> ('192.168.224.1', 54997)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:34:30,449 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 58348) -> ('192.168.224.1', 54997)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:34:30,450 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 58348) -> ('192.168.224.1', 54997)) State.IN_PROGRESS -> State.SUCCEEDED
+2026-01-19 18:34:30,451 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 58348) -> ('192.168.56.1', 54998)) State.FROZEN -> State.WAITING
+2026-01-19 18:34:30,451 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 58348) -> ('122.170.166.232', 54996)) State.FROZEN -> State.WAITING
+2026-01-19 18:34:30,472 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 58348) -> ('192.168.56.1', 54998)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:34:30,493 - websoket_hindi_db.tts.tts_websocket - INFO - Audio sample rate: 24000Hz
+2026-01-19 18:34:30,493 - websoket_hindi_db.tts.tts_websocket - INFO - Audio received in 1.624s, size: 293.6KB, 24000Hz
+2026-01-19 18:34:30,493 - websoket_hindi_db.tts.tts_websocket - INFO - Resampling from 24000Hz to 16000Hz
+2026-01-19 18:34:30,505 - websoket_hindi_db.tts.tts_websocket - INFO - Resampled to 100206 samples at 16000Hz
+2026-01-19 18:34:30,505 - websoket_hindi_db.tts.tts_websocket - INFO - TTS successful: 1.624s, 293.6KB audio, 13 chunks
+2026-01-19 18:34:30,505 - __main__ - INFO - [BOT SESSION] Pushing 100206 samples to out_track (SR: 24000)
+2026-01-19 18:34:30,509 - __main__ - INFO - [BOT SESSION] ✅ Audio pushed to out_track
+2026-01-19 18:34:30,510 - __main__ - INFO - [BOT SESSION] Greeting sent
+2026-01-19 18:34:30,510 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 58348) -> ('122.170.166.232', 54996)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:34:30,531 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 58344) -> ('192.168.56.1', 54998)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:34:30,532 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 58344) -> ('192.168.56.1', 54998)) State.IN_PROGRESS -> State.SUCCEEDED
+2026-01-19 18:34:30,532 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 58344) -> ('122.170.166.232', 54996)) State.FROZEN -> State.WAITING
+2026-01-19 18:34:30,562 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 58344) -> ('122.170.166.232', 54996)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:35:15,030 - __main__ - INFO - [BOT SERVER] Connection closed normally
+2026-01-19 18:35:33,667 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 58345) -> ('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 54999)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:35:33,699 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 58346) -> ('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 54999)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:35:33,731 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 58345) -> ('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 55000)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:35:33,794 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 58346) -> ('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 55000)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:35:33,809 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 58344) -> ('192.168.1.6', 54996)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:35:33,856 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 58347) -> ('192.168.224.1', 54997)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:35:33,886 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 58347) -> ('192.168.56.1', 54998)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:35:33,916 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 58347) -> ('122.170.166.232', 54996)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:35:33,947 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 58348) -> ('192.168.1.6', 54996)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:35:33,979 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 58344) -> ('192.168.224.1', 54997)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:35:34,040 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 58348) -> ('192.168.56.1', 54998)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:35:34,070 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 58348) -> ('122.170.166.232', 54996)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:35:34,118 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 58344) -> ('122.170.166.232', 54996)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:43:36,274 - websoket_hindi_db.tts.tts_websocket - WARNING - Voice reference file not found: data/saved_voices/refe2_fast_trimmed1.wav
+2026-01-19 18:43:36,629 - __main__ - INFO - Mongo FAQ loaded: 39 items from pro_analysis.FAQs_hindi
+2026-01-19 18:43:36,629 - websoket_hindi_db.tts.tts_websocket - INFO - 🔗 Connecting to TTS WebSocket...
+2026-01-19 18:43:37,364 - websoket_hindi_db.tts.tts_websocket - INFO - ✅ TTS WebSocket connected
+2026-01-19 18:43:37,364 - websoket_hindi_db.stt.stt_websocket - INFO - 🔗 Connecting to STT WebSocket...
+2026-01-19 18:43:38,087 - websoket_hindi_db.stt.stt_websocket - INFO - ✅ STT WebSocket connected
+2026-01-19 18:43:38,087 - __main__ - INFO - BOT signaling server starting on ws://0.0.0.0:8765
+2026-01-19 18:43:38,089 - __main__ - INFO - BOT signaling server is running
+2026-01-19 18:43:49,668 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 64930)
+2026-01-19 18:45:42,712 - __main__ - INFO - [BOT SERVER] New connection from ('127.0.0.1', 58985)
+2026-01-19 18:45:42,777 - __main__ - INFO - [BOT SERVER] Received message: offer, call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:42,778 - __main__ - INFO - [BOT SERVER] Processing offer for call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:42,784 - __main__ - INFO - [BOT SERVER] Created new WebRTC session for call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:42,784 - __main__ - INFO - [BOT SERVER] Setting remote description... (SDP length: 1295)
+2026-01-19 18:45:42,785 - __main__ - INFO - [BOT SERVER] Audio track received for call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:42,785 - __main__ - INFO - [BOT SERVER] Creating answer...
+2026-01-19 18:45:42,785 - __main__ - INFO - [BOT SERVER] Connection state before answer: new
+2026-01-19 18:45:42,786 - __main__ - INFO - [BOT SESSION] Starting to handle incoming track for call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:42,786 - __main__ - INFO - [BOT SESSION] Waiting for connection to be established...
+2026-01-19 18:45:42,793 - aioice.ice - INFO - Connection(0) Could not bind to 169.254.226.197 - [WinError 10049] The requested address is not valid in its context
+2026-01-19 18:45:42,793 - aioice.ice - INFO - Connection(0) Could not bind to 169.254.159.173 - [WinError 10049] The requested address is not valid in its context
+2026-01-19 18:45:42,794 - aioice.ice - INFO - Connection(0) Could not bind to 169.254.36.12 - [WinError 10049] The requested address is not valid in its context
+2026-01-19 18:45:42,794 - aioice.ice - INFO - Connection(0) Could not bind to 169.254.202.251 - [WinError 10049] The requested address is not valid in its context
+2026-01-19 18:45:43,788 - __main__ - INFO - [BOT SESSION] Current connection state: new
+2026-01-19 18:45:47,810 - __main__ - INFO - [BOT SERVER] Answer created, connection state: new
+2026-01-19 18:45:47,810 - __main__ - INFO - [BOT SERVER] Answer created, sending to Flask server
+2026-01-19 18:45:47,810 - __main__ - INFO - [BOT SERVER] ✅ Answer sent for call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,811 - __main__ - INFO - [BOT SESSION] Connection state changed: connecting for call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,815 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,815 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,815 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.1.6:63990 (host)
+2026-01-19 18:45:47,818 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,818 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,818 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.224.1:63991 (host)
+2026-01-19 18:45:47,820 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,820 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,821 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.56.1:63992 (host)
+2026-01-19 18:45:47,823 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,823 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,824 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3:63993 (host)
+2026-01-19 18:45:47,826 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,826 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,826 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2:63994 (host)
+2026-01-19 18:45:47,829 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,829 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,829 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 122.170.166.232:63990 (srflx)
+2026-01-19 18:45:47,831 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,832 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,832 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.1.6:9 (host)
+2026-01-19 18:45:47,832 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 63996) -> ('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 63993)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:45:47,835 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,835 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,835 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.224.1:9 (host)
+2026-01-19 18:45:47,838 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,838 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,838 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 192.168.56.1:9 (host)
+2026-01-19 18:45:47,840 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,841 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,841 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3:9 (host)
+2026-01-19 18:45:47,844 - __main__ - INFO - [BOT SERVER] Received message: ice, call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,844 - __main__ - INFO - [BOT SERVER] ICE candidate received for call_id: 958e942cffb848ed858da50a4d888906
+2026-01-19 18:45:47,844 - __main__ - INFO - [BOT SERVER] ✅ ICE candidate added: 2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2:9 (host)
+2026-01-19 18:45:47,857 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 63997) -> ('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 63993)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:45:47,888 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 63996) -> ('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 63994)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:45:47,920 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 63997) -> ('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 63994)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:45:47,952 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 63995) -> ('192.168.1.6', 63990)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:45:47,982 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 63998) -> ('192.168.1.6', 63990)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:45:47,984 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 63998) -> ('192.168.1.6', 63990)) State.IN_PROGRESS -> State.SUCCEEDED
+2026-01-19 18:45:47,984 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 63998) -> ('192.168.224.1', 63991)) State.FROZEN -> State.WAITING
+2026-01-19 18:45:47,984 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 63998) -> ('192.168.56.1', 63992)) State.FROZEN -> State.WAITING
+2026-01-19 18:45:47,984 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 63998) -> ('122.170.166.232', 63990)) State.FROZEN -> State.WAITING
+2026-01-19 18:45:48,013 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 63998) -> ('192.168.224.1', 63991)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:45:48,044 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 63998) -> ('192.168.56.1', 63992)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:45:48,075 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 63998) -> ('122.170.166.232', 63990)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:45:48,106 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 63999) -> ('192.168.1.6', 63990)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:45:48,137 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 63995) -> ('192.168.224.1', 63991)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:45:48,168 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 63999) -> ('192.168.224.1', 63991)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:45:48,169 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 63999) -> ('192.168.224.1', 63991)) State.IN_PROGRESS -> State.SUCCEEDED
+2026-01-19 18:45:48,169 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 63999) -> ('192.168.56.1', 63992)) State.FROZEN -> State.WAITING
+2026-01-19 18:45:48,170 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 63999) -> ('122.170.166.232', 63990)) State.FROZEN -> State.WAITING
+2026-01-19 18:45:48,199 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 63999) -> ('192.168.56.1', 63992)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:45:48,230 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 63999) -> ('122.170.166.232', 63990)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:45:48,260 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 63995) -> ('192.168.56.1', 63992)) State.FROZEN -> State.IN_PROGRESS
+2026-01-19 18:45:48,261 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 63995) -> ('192.168.56.1', 63992)) State.IN_PROGRESS -> State.SUCCEEDED
+2026-01-19 18:45:48,261 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 63995) -> ('122.170.166.232', 63990)) State.FROZEN -> State.WAITING
+2026-01-19 18:45:48,290 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 63995) -> ('122.170.166.232', 63990)) State.WAITING -> State.IN_PROGRESS
+2026-01-19 18:45:51,794 - __main__ - WARNING - [BOT SESSION] ⚠️ Connection not ready after 8s (state: connecting)
+2026-01-19 18:45:51,794 - __main__ - INFO - [BOT SESSION] ⚠️ Proceeding anyway - connection might still work (state: connecting)
+2026-01-19 18:45:51,794 - __main__ - INFO - [BOT SESSION] Speaking greeting (connection state: connecting)
+2026-01-19 18:45:51,795 - __main__ - WARNING - [BOT SESSION] Connection not connected (state: connecting), waiting...
+2026-01-19 18:45:56,800 - __main__ - ERROR - [BOT SESSION] ❌ Connection not ready after timeout (state: connecting)
+2026-01-19 18:45:56,800 - __main__ - INFO - [BOT SESSION] _speak_text_into_call: 'मास्टर अभी व्यस्त हैं। मैं आपकी मदद करूँगा। कृपया ...' (connection: connecting)
+2026-01-19 18:45:56,802 - __main__ - INFO - TTS input length: 68 chars
+2026-01-19 18:45:56,802 - websoket_hindi_db.tts.tts_websocket - INFO - Starting streaming TTS (Prompt ID: 1000)
+2026-01-19 18:45:56,802 - websoket_hindi_db.tts.tts_websocket - INFO - 🎤 TTS [HI] Input: 68 chars
+2026-01-19 18:45:56,802 - websoket_hindi_db.tts.tts_websocket - INFO - 🔤 Using model: xtts
+2026-01-19 18:45:58,408 - websoket_hindi_db.tts.tts_websocket - INFO - Audio sample rate: 24000Hz
+2026-01-19 18:45:58,408 - websoket_hindi_db.tts.tts_websocket - INFO - Audio received in 1.606s, size: 291.6KB, 24000Hz
+2026-01-19 18:45:58,408 - websoket_hindi_db.tts.tts_websocket - INFO - Resampling from 24000Hz to 16000Hz
+2026-01-19 18:45:58,411 - websoket_hindi_db.tts.tts_websocket - INFO - Resampled to 99524 samples at 16000Hz
+2026-01-19 18:45:58,411 - websoket_hindi_db.tts.tts_websocket - INFO - TTS successful: 1.606s, 291.6KB audio, 13 chunks
+2026-01-19 18:45:58,412 - __main__ - INFO - [BOT SESSION] Pushing 99524 samples to out_track (SR: 24000, connection: connecting)
+2026-01-19 18:45:58,415 - __main__ - INFO - [BOT SESSION] ✅ Audio pushed to out_track
+2026-01-19 18:45:58,415 - __main__ - INFO - [BOT SESSION] Greeting sent
+2026-01-19 18:46:32,732 - __main__ - INFO - [BOT SERVER] Connection closed normally
+2026-01-19 18:46:51,376 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 63996) -> ('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 63993)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:46:51,407 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 63997) -> ('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 63993)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:46:51,439 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 63996) -> ('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 63994)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:46:51,471 - aioice.ice - INFO - Connection(0) Check CandidatePair(('2401:4900:1c80:b17b:79d0:b3fc:d87c:64c3', 63997) -> ('2401:4900:1c80:b17b:8a66:5afe:e86f:d8c2', 63994)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:46:51,501 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 63995) -> ('192.168.1.6', 63990)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:46:51,564 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 63998) -> ('192.168.224.1', 63991)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:46:51,595 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 63998) -> ('192.168.56.1', 63992)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:46:51,641 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.1.6', 63998) -> ('122.170.166.232', 63990)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:46:51,657 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 63999) -> ('192.168.1.6', 63990)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:46:51,703 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 63995) -> ('192.168.224.1', 63991)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:46:51,767 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 63999) -> ('192.168.56.1', 63992)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:46:51,799 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.224.1', 63999) -> ('122.170.166.232', 63990)) State.IN_PROGRESS -> State.FAILED
+2026-01-19 18:46:51,846 - aioice.ice - INFO - Connection(0) Check CandidatePair(('192.168.56.1', 63995) -> ('122.170.166.232', 63990)) State.IN_PROGRESS -> State.FAILED

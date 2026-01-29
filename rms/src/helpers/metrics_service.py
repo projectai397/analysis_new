@@ -43,6 +43,27 @@ def _get_balance(user_id: ObjectId) -> float:
     doc = users.find_one({"_id": user_id}, {"balance": 1})
     return _f(doc.get("balance")) if doc else 0.0
 
+def _user_name_map(user_ids: List[Any]) -> Dict[Any, str]:
+    if not users or not user_ids:
+        return {}
+    oids = []
+    for uid in user_ids:
+        if uid is None:
+            continue
+        try:
+            oids.append(uid if isinstance(uid, ObjectId) else ObjectId(uid))
+        except Exception:
+            pass
+    if not oids:
+        return {}
+    out: Dict[Any, str] = {}
+    for doc in users.find({"_id": {"$in": oids}}, {"_id": 1, "name": 1, "userName": 1, "username": 1}):
+        oid = doc.get("_id")
+        name = (doc.get("userName") or doc.get("name") or doc.get("username") or "")
+        out[oid] = name
+        out[str(oid)] = name
+    return out
+
 # ======================== Normalization (orders -> trade-like rows) ========================
 
 def _norm_user_id(d: Dict[str, Any]):
@@ -359,12 +380,16 @@ def top_profitable(limit: int, match: Dict[str, Any]):
         rows.append({
             "parentId": g["parentId"],
             "userId": b.get("userId"),
+            "userName": None,
             "symbolId": b.get("symbolId"),
             "symbolName": b.get("symbolTitle") or b.get("symbolName"),
             "productType": b.get("productType"),
             "pnl": pnl,
             "tradeValue": _group_entry_notional(g),
         })
+    name_map = _user_name_map([r["userId"] for r in rows])
+    for r in rows:
+        r["userName"] = name_map.get(r["userId"]) or name_map.get(str(r["userId"])) or ""
     rows.sort(key=lambda r: r["pnl"], reverse=True)
     return rows[: max(0, int(limit))]
 
@@ -378,12 +403,16 @@ def top_loser(limit: int, match: Dict[str, Any]):
         rows.append({
             "parentId": g["parentId"],
             "userId": b.get("userId"),
+            "userName": None,
             "symbolId": b.get("symbolId"),
             "symbolName": b.get("symbolTitle") or b.get("symbolName"),
             "productType": b.get("productType"),
             "pnl": pnl,
             "tradeValue": _group_entry_notional(g),
         })
+    name_map = _user_name_map([r["userId"] for r in rows])
+    for r in rows:
+        r["userName"] = name_map.get(r["userId"]) or name_map.get(str(r["userId"])) or ""
     rows.sort(key=lambda r: r["pnl"])  # ascending
     return rows[: max(0, int(limit))]
 
@@ -398,12 +427,16 @@ def top_biggest_trades(limit: int, match: Dict[str, Any]):
         rows.append({
             "parentId": g["parentId"],
             "userId": b.get("userId"),
+            "userName": None,
             "symbolId": b.get("symbolId"),
             "symbolName": b.get("symbolTitle") or b.get("symbolName"),
             "productType": b.get("productType"),
             "tradeValue": _group_entry_notional(g),
             "pnl": compute_group_pnl(g),
         })
+    name_map = _user_name_map([r["userId"] for r in rows])
+    for r in rows:
+        r["userName"] = name_map.get(r["userId"]) or name_map.get(str(r["userId"])) or ""
     rows.sort(key=lambda r: r["tradeValue"], reverse=True)
     return rows[: max(0, int(limit))]
 
@@ -489,6 +522,7 @@ def _top_biggest_single_side(
         rows.append({
             "orderId": nd.get("_id"),
             "userId": nd.get("userId"),
+            "userName": None,
             "symbolId": nd.get("symbolId"),
             "symbolName": nd.get("symbolTitle") or nd.get("symbolName"),
             "productType": nd.get("productType"),
@@ -499,6 +533,9 @@ def _top_biggest_single_side(
             "lotSize": lot,
             "executionDateTime": nd.get("executionDateTime"),
         })
+    name_map = _user_name_map([r["userId"] for r in rows])
+    for r in rows:
+        r["userName"] = name_map.get(r["userId"]) or name_map.get(str(r["userId"])) or ""
 
     rows.sort(key=lambda r: r["tradeValue"], reverse=True)
     return rows[: max(0, int(limit))]
