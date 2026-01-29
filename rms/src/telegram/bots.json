@@ -1,9 +1,23 @@
 [
   {
     "name": "500x exchange",
-    "token": "8291834511:AAGu7zmTCuiw68ngt13f3W2qU-jGCWIwop4",
-    "logo_path": "logo_500x.png",
-    "url": "https://client.500x.exchange/"
+    "token": "8527682663:AAGhk4mJOZmq5v6upgC1d8tqPCxCR-5he6Y",
+    "logo_path": "logo_500x.png"
+  },
+  {
+    "name": "Trade Hub",
+    "token": "8362964483:AAHODQ8wpimLN_5Q7QD9mRq9n4cM-7ZwgTE",
+    "logo_path": "logo_tradehub.jpg"
+  },
+  {
+    "name": "Profit",
+    "token": "8571529027:AAHfbvALyLsMcAcxi_QIBwSB4L5OvSoxJSU",
+    "logo_path": "logo_profit.jpg"
+  },
+  {
+    "name": "Protrader",
+    "token": "8573256279:AAHxBII9pZxTTntMROQ-RjYAvkKttkigAc4",
+    "logo_path": "logo_protrader.jpg"
   }
   
 ]
