@@ -1827,6 +1827,13 @@ def create_app() -> Flask:
                 # NOTE: Only call.start requires a selected chatroom. Other call operations
                 # (accept, reject, end, offer, answer, ice) can work without a selected chatroom
                 # because they use call_id to look up the call info from ACTIVE_CALLS.
+                #
+                # LIVE vs LOCAL: If call.accepted reaches user locally but not in live, the usual
+                # cause is multiple app workers: USER_SOCKETS/ACTIVE_CALLS are per-process. The
+                # user may be connected to worker A and the master to worker B; when master
+                # accepts on B, B has no socket for the user. Fix: run a single process for /ws,
+                # or use sticky sessions so both clients hit the same worker, or use Redis pub/sub
+                # to forward call.accepted to the worker that holds the user's socket.
                 # ──────────────────────────────────────────────────────────────
                 if t.startswith("call."):
                     print("CALL BRANCH HIT:", t, "chat_id:", chat_id, "conn_role:", conn_role)
@@ -1907,13 +1914,24 @@ def create_app() -> Flask:
 
                         c["state"] = "accepted"
 
-                        caller_role = c.get("caller_role", "user")
-                        caller_id = c.get("caller_id", c.get("user_id", ""))
-                        _sock_send_role(
-                            caller_role,
-                            caller_id,
-                            {"type": "call.accepted", "call_id": call_id, "chat_id": c["chat_id"]},
-                        )
+                        caller_role = (c.get("caller_role") or "user").strip().lower()
+                        caller_id = str(c.get("caller_id") or c.get("user_id") or "").strip()
+                        if not caller_id:
+                            logger.warning(f"[CALL.ACCEPT] caller_id empty for call_id={call_id}, c={c}")
+                            ws.send(json.dumps({"type": "call.error", "error": "caller_id_missing"}))
+                            last_activity["ts"] = time.time()
+                            continue
+
+                        payload_accepted = {"type": "call.accepted", "call_id": call_id, "chat_id": c["chat_id"]}
+                        logger.info(f"[CALL.ACCEPT] Sending call.accepted to caller_id={caller_id!r}, caller_role={caller_role!r}")
+                        ok_sent = _sock_send_role(caller_role, caller_id, payload_accepted)
+                        if not ok_sent:
+                            logger.warning(
+                                f"[CALL.ACCEPT] call.accepted NOT delivered to user (caller_id={caller_id}). "
+                                "User may be on another server instance (multi-worker). Ensure sticky sessions or single WS process."
+                            )
+                        else:
+                            logger.info(f"[CALL.ACCEPT] call.accepted delivered to caller_id={caller_id}")
 
                         ws.send(json.dumps({"type": "call.accepted_ack", "call_id": call_id}))
                         last_activity["ts"] = time.time()
@@ -3215,10 +3233,14 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"✖ PRO_DB connection FAILED → {e}")
 
+    # Option A: WebSocket call signaling (call.accepted, call.incoming, etc.) requires a
+    # single process so USER_SOCKETS / MASTER_SOCKETS / ACTIVE_CALLS are shared.
+    # Waitress is single-process by default, so /ws works. If you use Gunicorn in live,
+    # run with 1 worker only: gunicorn -w 1 -k ... app:create_app()
     if getattr(config, "DEVELOPMENT", False):
         app.run(host="0.0.0.0", port=config.PORT, debug=True, use_reloader=False)
     else:
         logger.info(
-            f"Serving API + Scheduler on 0.0.0.0:{config.PORT}"
+            f"Serving API + Scheduler on 0.0.0.0:{config.PORT} (single process – WebSocket call signaling enabled)"
         )
         serve(app, host="0.0.0.0", port=config.PORT)
