@@ -976,9 +976,20 @@ def create_app() -> Flask:
                 user_ids = [_as_oid(u.get("_id")) for u in users if u.get("_id")]
                 user_chatrooms = Chatroom.objects(user_id__in=user_ids).only(*base_fields).order_by("-updated_time") if user_ids else Chatroom.objects(id=None)
 
-                all_rooms = list(master_chatrooms) + list(user_chatrooms)
+                # Deduplicate by chat_id
+                seen_ids = set()
+                all_rooms = []
+                for r in list(master_chatrooms) + list(user_chatrooms):
+                    rid = str(r.id)
+                    if rid not in seen_ids:
+                        seen_ids.add(rid)
+                        all_rooms.append(r)
+                
                 if master_staff_bot:
-                    all_rooms.insert(0, master_staff_bot)
+                    bot_id = str(master_staff_bot.id)
+                    if bot_id not in seen_ids:
+                        all_rooms.insert(0, master_staff_bot)
+                        seen_ids.add(bot_id)
 
                 all_rooms = sorted(all_rooms, key=lambda r: getattr(r, "updated_time", getattr(r, "created_time", datetime.min.replace(tzinfo=timezone.utc))), reverse=True)
 
