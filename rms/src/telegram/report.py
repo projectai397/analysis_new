@@ -224,10 +224,10 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
     
     buffer = BytesIO()
     doc = SimpleDocTemplate(
-        buffer, 
+        buffer,
         pagesize=A4,
-        leftMargin=0.3*inch,
-        rightMargin=0.3*inch,
+        leftMargin=0.2*inch,
+        rightMargin=0.2*inch,
         topMargin=0.3*inch,
         bottomMargin=0.3*inch
     )
@@ -283,8 +283,8 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
         total_pnl += pnl
         total_asset_value += asset_value
         
-        username_display = username[:5] + "..." if len(username) > 5 else username
-        parent_display = (parent_username[:5] + "..." if len(parent_username) > 5 else parent_username) if parent_username != "-" else "-"
+        username_display = username[:7] + "..." if len(username) > 7 else username
+        parent_display = (parent_username[:7] + "..." if len(parent_username) > 7 else parent_username) if parent_username != "-" else "-"
         
         # Display PnL with explicit + / - prefix
         if pnl > 0:
@@ -321,17 +321,16 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
         f"{total_credit:,.2f}",
     ])
     
-    # Calculate available width: A4 width (8.27") - left margin (0.3") - right margin (0.3") = 7.67"
-    # Distribute across 6 columns with more space for numeric columns
+    # A4 width 8.27" minus margins 0.2" each = 7.87"; wider Username/Parent so names don't overlap
     table = Table(
         data,
         colWidths=[
-            1.1 * inch,  # Username
-            1.1 * inch,  # Parent
-            1.1 * inch,  # Balance
-            1.1 * inch,  # PnL
-            1.1 * inch,  # Asset Value
-            1.1 * inch,  # Credit
+            1.45 * inch,  # Username (wider for 7 chars + ...)
+            1.45 * inch,  # Parent (wider for 7 chars + ...)
+            1.25 * inch,  # Balance
+            1.25 * inch,  # PnL
+            1.25 * inch,  # Asset Value
+            1.25 * inch,  # Credit
         ],
     )
     
@@ -346,7 +345,6 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
         ('FONTSIZE', (0, 0), (-1, 0), 11),
         ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
         ('TOPPADDING', (0, 0), (-1, 0), 8),
-        ('BACKGROUND', (0, 1), (-1, -2), colors.white),
         ('TEXTCOLOR', (0, 1), (-1, -2), colors.black),
         ('FONTNAME', (0, 1), (-1, -2), 'Helvetica'),
         ('FONTSIZE', (0, 1), (-1, -2), 10),
@@ -354,7 +352,6 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
         ('BOTTOMPADDING', (0, 1), (-1, -2), 6),
         ('LEFTPADDING', (0, 1), (-1, -2), 10),
         ('RIGHTPADDING', (0, 1), (-1, -2), 10),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#F5F5F5')]),
         ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#CCCCCC')),
         ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#E8E8E8')),
         ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
@@ -367,21 +364,39 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
         ('TEXTCOLOR', (0, -1), (-1, -1), colors.black),
     ])
     
+    # Lighter green/red for row background by asset value; cell text color for Balance, PnL, Asset Value, Credit
+    LIGHT_GREEN = colors.HexColor('#e8f5e9')   # lighter green
+    LIGHT_RED = colors.HexColor('#ffebee')    # lighter red
+    GREEN = colors.HexColor('#28a745')
+    RED = colors.HexColor('#dc3545')
+
     for i in range(1, len(data) - 1):
         user_doc = user_data_list[i - 1]
         user_id = user_doc.get("_id")
         balance = float(user_doc.get("balance") or 0)
+        credit = float(user_doc.get("credit") or 0)
         pnl = calculate_user_pnl(user_id)
         asset_value = balance + pnl
-        
-        # Row color by Asset Value: + green, - red, 0 black
+
+        # Row background by Asset Value: + light green, - light red, 0 white
         if asset_value > 0:
-            row_color = colors.HexColor('#28a745')  # green
+            row_bg = LIGHT_GREEN
         elif asset_value < 0:
-            row_color = colors.HexColor('#dc3545')  # red
+            row_bg = LIGHT_RED
         else:
-            row_color = colors.black  # black for zero
-        table_style.add('TEXTCOLOR', (0, i), (-1, i), row_color)
+            row_bg = colors.white
+        table_style.add('BACKGROUND', (0, i), (-1, i), row_bg)
+
+        # Username and Parent: always black
+        table_style.add('TEXTCOLOR', (0, i), (1, i), colors.black)
+        # Balance: + or 0 green, - red
+        table_style.add('TEXTCOLOR', (2, i), (2, i), GREEN if balance >= 0 else RED)
+        # PnL: + or 0 green, - red
+        table_style.add('TEXTCOLOR', (3, i), (3, i), GREEN if pnl >= 0 else RED)
+        # Asset Value: + or 0 green, - red
+        table_style.add('TEXTCOLOR', (4, i), (4, i), GREEN if asset_value >= 0 else RED)
+        # Credit: + or 0 green, - red
+        table_style.add('TEXTCOLOR', (5, i), (5, i), GREEN if credit >= 0 else RED)
     
     total_balance_color = colors.HexColor('#28a745') if total_balance >= 0 else colors.HexColor('#dc3545')
     if total_pnl > 0:
