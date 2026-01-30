@@ -1924,14 +1924,21 @@ def create_app() -> Flask:
 
                         payload_accepted = {"type": "call.accepted", "call_id": call_id, "chat_id": c["chat_id"]}
                         logger.info(f"[CALL.ACCEPT] Sending call.accepted to caller_id={caller_id!r}, caller_role={caller_role!r}")
-                        ok_sent = _sock_send_role(caller_role, caller_id, payload_accepted)
+                        # Send to ALL sockets for this user so every client (Postman, browser, etc.) receives it
+                        if caller_role == "user":
+                            sent_count = _sock_send_all(USER_SOCKETS, caller_id, payload_accepted)
+                            ok_sent = sent_count > 0
+                            if ok_sent:
+                                logger.info(f"[CALL.ACCEPT] call.accepted delivered to {sent_count} socket(s) for caller_id={caller_id}")
+                        else:
+                            ok_sent = _sock_send_role(caller_role, caller_id, payload_accepted)
+                            if ok_sent:
+                                logger.info(f"[CALL.ACCEPT] call.accepted delivered to caller_id={caller_id}")
                         if not ok_sent:
                             logger.warning(
                                 f"[CALL.ACCEPT] call.accepted NOT delivered to user (caller_id={caller_id}). "
                                 "User may be on another server instance (multi-worker). Ensure sticky sessions or single WS process."
                             )
-                        else:
-                            logger.info(f"[CALL.ACCEPT] call.accepted delivered to caller_id={caller_id}")
 
                         ws.send(json.dumps({"type": "call.accepted_ack", "call_id": call_id}))
                         last_activity["ts"] = time.time()
