@@ -3177,7 +3177,7 @@ if __name__ == "__main__":
         except Exception as e:
             logger.exception(f"✖ Daily backup crashed: {e}")
 
-    schedule.every().day.at("06:45").do(
+    schedule.every().day.at("00:00").do(
         lambda: _run_async(_daily_backup_job, "backup-03")
     )
 
@@ -3201,7 +3201,7 @@ if __name__ == "__main__":
         except Exception as e:
             logger.exception(f"✖ Daily upload crashed: {e}")
 
-    schedule.every().day.at("06:55").do(
+    schedule.every().day.at("00:10").do(
         lambda: _run_async(_daily_upload_job, "upload-04")
     )
 
@@ -3224,7 +3224,7 @@ if __name__ == "__main__":
         except Exception as e:
             logger.exception(f"✖ Daily cleanup crashed: {e}")
 
-    schedule.every().day.at("07:00").do(
+    schedule.every().day.at("00:15").do(
         lambda: _run_async(_daily_cleanup_job, "cleanup-05")
     )
 
