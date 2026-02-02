@@ -1429,9 +1429,9 @@ def run_bot_instance(token: str, bot_name: str, logo_path: str, trading_url: str
 
 
 def _daily_summarize_job():
-    """Daily job to summarize WhatsApp messages at 11:45 PM"""
+    """Daily job to summarize WhatsApp messages at 11:45 PM IST"""
     try:
-        logger.info("📝 Starting daily summarize job at 11:45 PM")
+        logger.info("📝 Starting daily summarize job at 11:45 PM IST")
         success_count, error_count = process_all_documents()
         logger.info(
             f"✔ Daily summarize done → {success_count} successful, {error_count} errors"
@@ -1442,8 +1442,8 @@ def _daily_summarize_job():
 
 def _summarize_scheduler_loop():
     """Background thread that runs the scheduler for daily summarize job"""
-    schedule.every().day.at("09:53").do(_daily_summarize_job)
-    logger.info("📅 Summarize scheduler started - will run daily at 11:45 PM")
+    schedule.every().day.at("18:15").do(_daily_summarize_job)
+    logger.info("📅 Summarize scheduler started - will run daily at 11:45 PM IST (18:15 UTC)")
     
     while True:
         schedule.run_pending()
