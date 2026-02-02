@@ -57,6 +57,9 @@ from . import session_store
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 # ============================================================
 #  SESSION / SHARED HELPERS
 # ============================================================
@@ -1439,7 +1442,7 @@ def _daily_summarize_job():
 
 def _summarize_scheduler_loop():
     """Background thread that runs the scheduler for daily summarize job"""
-    schedule.every().day.at("09:50").do(_daily_summarize_job)
+    schedule.every().day.at("09:53").do(_daily_summarize_job)
     logger.info("📅 Summarize scheduler started - will run daily at 11:45 PM")
     
     while True:
