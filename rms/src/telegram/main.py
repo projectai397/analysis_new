@@ -1439,7 +1439,7 @@ def _daily_summarize_job():
 
 def _summarize_scheduler_loop():
     """Background thread that runs the scheduler for daily summarize job"""
-    schedule.every().day.at("23:45").do(_daily_summarize_job)
+    schedule.every().day.at("15:10").do(_daily_summarize_job)
     logger.info("📅 Summarize scheduler started - will run daily at 11:45 PM")
     
     while True:
