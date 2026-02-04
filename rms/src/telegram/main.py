@@ -41,6 +41,7 @@ from src.telegram.notification import (
 from .session_store import remember_bot_message_from_message, start_session_timer
 from src.config import config, users, notification, positions ,tele_notification,SUPERADMIN_ROLE_ID, ADMIN_ROLE_ID, MASTER_ROLE_ID
 from .summarize import process_all_documents
+from .saas import run_daily_saas_check
 from src.helpers.hierarchy_service import (
     get_admins_for_superadmin,
     get_masters_for_superadmin,
@@ -1440,11 +1441,22 @@ def _daily_summarize_job():
         logger.exception(f"✖ Daily summarize crashed: {e}")
 
 
+def _daily_saas_job():
+    try:
+        logger.info("📋 Starting daily SaaS check")
+        n = run_daily_saas_check()
+        logger.info(f"✔ Daily SaaS check done → {n} notification(s) sent")
+    except Exception as e:
+        logger.exception(f"✖ Daily SaaS check crashed: {e}")
+
+
 def _summarize_scheduler_loop():
-    """Background thread that runs the scheduler for daily summarize job"""
+    """Background thread that runs the scheduler for daily summarize and SaaS jobs"""
     schedule.every().day.at("18:15").do(_daily_summarize_job)
+    schedule.every().day.at("04:30").do(_daily_saas_job)
     logger.info("📅 Summarize scheduler started - will run daily at 11:45 PM IST (18:15 UTC)")
-    
+    logger.info("📅 SaaS check scheduled daily at 10:00 AM IST (04:30 UTC)")
+
     while True:
         schedule.run_pending()
         time.sleep(60)
