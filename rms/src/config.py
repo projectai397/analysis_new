@@ -66,6 +66,8 @@ class Settings:
     FAQ_MATCH_THRESHOLD = int(os.getenv("FAQ_MATCH_THRESHOLD", "80"))
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
     OLLAMA_PHI_MODEL = os.getenv("OLLAMA_PHI_MODEL", "phi:2.7b")
+    NOTIFICATION_URL = os.getenv("NOTIFICATION_URL", "")
+    STATIC_TOKEN = os.getenv("STATIC_TOKEN", "")
 
 config = Settings()
 

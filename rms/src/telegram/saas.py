@@ -8,6 +8,7 @@ from dateutil.parser import isoparse
 from dateutil.relativedelta import relativedelta
 
 from src.config import config, users, notification, ADMIN_ROLE_ID
+from src.telegram.notify_external import post_cron_notification
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,7 @@ def run_daily_saas_check() -> int:
             {"userName": 1, "createdAt": 1, "saasAmount": 1},
         )
         total_sent = 0
+        admin_count = 0
         for doc in cursor:
             created_dt = _created_to_date(doc.get("createdAt"))
             if not created_dt:
@@ -101,8 +103,14 @@ def run_daily_saas_check() -> int:
                 if anniversary == today:
                     sent = _send_saas_notification(chat_ids, user_name, month_num, amount)
                     total_sent += sent
+                    admin_count += 1
                     logger.info(f"SaaS notification: userName={user_name}, {month_num} month(s), amount={amount}")
                     break
+        if admin_count == 1:
+            msg = "job done send notification for 1 admin"
+        else:
+            msg = f"job done send notification for {admin_count} admins"
+        post_cron_notification(msg)
         return total_sent
     except Exception as e:
         logger.exception(f"run_daily_saas_check: {e}")
