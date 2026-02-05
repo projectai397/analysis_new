@@ -1882,6 +1882,8 @@ def create_app() -> Flask:
                             "target_id": target_id,
                             "caller_role": conn_role,
                             "caller_id": str(pro_id),
+                            # ✅ route signaling to the socket that is in this call (fixes multi-tab ICE)
+                            "caller_ws": ws,
                         }
 
                         # ✅ Send call.incoming to target - works even if target is not in this chatroom
@@ -1924,6 +1926,8 @@ def create_app() -> Flask:
                             continue
 
                         c["state"] = "accepted"
+                        # ✅ so answer/ICE go to the user's socket that started this call
+                        c["target_ws"] = ws
 
                         caller_role = (c.get("caller_role") or "user").strip().lower()
                         caller_id = str(c.get("caller_id") or c.get("user_id") or "").strip()
@@ -1935,16 +1939,27 @@ def create_app() -> Flask:
 
                         payload_accepted = {"type": "call.accepted", "call_id": call_id, "chat_id": c["chat_id"]}
                         logger.info(f"[CALL.ACCEPT] Sending call.accepted to caller_id={caller_id!r}, caller_role={caller_role!r}")
-                        # Send to ALL sockets for this user so every client (Postman, browser, etc.) receives it
-                        if caller_role == "user":
-                            sent_count = _sock_send_all(USER_SOCKETS, caller_id, payload_accepted)
-                            ok_sent = sent_count > 0
-                            if ok_sent:
-                                logger.info(f"[CALL.ACCEPT] call.accepted delivered to {sent_count} socket(s) for caller_id={caller_id}")
-                        else:
-                            ok_sent = _sock_send_role(caller_role, caller_id, payload_accepted)
-                            if ok_sent:
-                                logger.info(f"[CALL.ACCEPT] call.accepted delivered to caller_id={caller_id}")
+                        # Prefer the socket that started this call (so answer/ICE will reach the same tab)
+                        caller_ws = c.get("caller_ws")
+                        ok_sent = False
+                        if caller_ws:
+                            try:
+                                caller_ws.send(json.dumps(payload_accepted))
+                                ok_sent = True
+                                logger.info(f"[CALL.ACCEPT] call.accepted delivered to caller_ws (single socket) for caller_id={caller_id}")
+                            except Exception as e:
+                                logger.debug(f"[CALL.ACCEPT] caller_ws send failed: {e}, falling back to role")
+                                c.pop("caller_ws", None)
+                        if not ok_sent:
+                            if caller_role == "user":
+                                sent_count = _sock_send_all(USER_SOCKETS, caller_id, payload_accepted)
+                                ok_sent = sent_count > 0
+                                if ok_sent:
+                                    logger.info(f"[CALL.ACCEPT] call.accepted delivered to {sent_count} socket(s) for caller_id={caller_id}")
+                            else:
+                                ok_sent = _sock_send_role(caller_role, caller_id, payload_accepted)
+                                if ok_sent:
+                                    logger.info(f"[CALL.ACCEPT] call.accepted delivered to caller_id={caller_id}")
                         if not ok_sent:
                             logger.warning(
                                 f"[CALL.ACCEPT] call.accepted NOT delivered to user (caller_id={caller_id}). "
@@ -2008,25 +2023,44 @@ def create_app() -> Flask:
                                 last_activity["ts"] = time.time()
                                 continue
 
-                        # ✅ routing: determine peer based on who is sending
+                        # ✅ routing: send to the socket that is in this call (fixes multi-tab ICE)
                         caller_id = str(c.get("caller_id", "") or c.get("user_id", ""))
                         target_id = str(c.get("target_id", "") or c.get("master_id", ""))
-                        
+
+                        def _send_to_ws(sock, msg_dict):
+                            try:
+                                sock.send(json.dumps(msg_dict))
+                                return True
+                            except Exception as e:
+                                logger.debug(f"[CALL] Send to specific ws failed: {e}")
+                                return False
+
                         if str(pro_id) == caller_id:
-                            # Current sender is the caller, send to target
-                            ok = _sock_send_role(
-                                str(c.get("target_role") or "master"),
-                                target_id,
-                                payload,
-                            )
+                            # Caller sent offer/ice → send to target (master)
+                            target_ws = c.get("target_ws")
+                            if target_ws and _send_to_ws(target_ws, payload):
+                                ok = True
+                            else:
+                                if target_ws:
+                                    c.pop("target_ws", None)
+                                ok = _sock_send_role(
+                                    str(c.get("target_role") or "master"),
+                                    target_id,
+                                    payload,
+                                )
                         else:
-                            # Current sender is the target, send to caller
-                            caller_role = c.get("caller_role", "user")
-                            ok = _sock_send_role(
-                                caller_role,
-                                caller_id,
-                                payload,
-                            )
+                            # Target (master) sent answer/ice → send to caller (user)
+                            caller_ws = c.get("caller_ws")
+                            if caller_ws and _send_to_ws(caller_ws, payload):
+                                ok = True
+                            else:
+                                if caller_ws:
+                                    c.pop("caller_ws", None)
+                                ok = _sock_send_role(
+                                    c.get("caller_role", "user"),
+                                    caller_id,
+                                    payload,
+                                )
 
                         if not ok:
                             ws.send(json.dumps({"type": "call.error", "error": "peer_offline"}))
