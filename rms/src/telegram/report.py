@@ -158,20 +158,21 @@ def calculate_user_pnl(user_id: ObjectId) -> float:
                     continue
                 
                 symbol_info = symbol_data.get(symbol_id, {"ask": 0, "bid": 0, "ltp": 0})
-                entry_price = float(pos.get("buyPrice") or pos.get("price") or pos.get("open_price") or 0)
-                total_quantity = float(pos.get("totalQuantity") or pos.get("quantity") or 0)
+                # Use 'price' as entry price (same as positions.py) — buyPrice may be wrong for sell trades
+                entry_price = float(pos.get("price") or pos.get("buyPrice") or pos.get("open_price") or 0)
+                quantity = float(pos.get("quantity") or pos.get("totalQuantity") or 0)
+                lot_size = float(pos.get("lotSize") or 1)
+                total_qty = quantity * lot_size
                 trade_type = str(pos.get("tradeType") or pos.get("orderType") or "").lower()
+                ltp = symbol_info["ltp"]
 
-                # For BUY: we buy first, close by selling at bid. PnL = (bid - buyPrice) * qty
-                # For SELL: we sell first at entry_price, close by buying at ask. PnL = (sellPrice - ask) * qty
-                # Use ask as "buying price" to close the sell position
-                ask_price = symbol_info["ask"] or symbol_info["ltp"]
-                bid_price = symbol_info["bid"] or symbol_info["ltp"]
-
-                if trade_type == "buy":
-                    pnl = (bid_price - entry_price) * total_quantity
-                elif trade_type == "sell":
-                    pnl = (entry_price - ask_price) * total_quantity  # sellPrice - buyBackPrice
+                # Use LTP as current price (matching site / positions.py logic)
+                # BUY: bought at entry_price, current value at LTP → PnL = (ltp - entry) * qty
+                # SELL: sold at entry_price, current cost at LTP → PnL = (entry - ltp) * qty
+                if trade_type in ["buy", "b"]:
+                    pnl = (ltp - entry_price) * total_qty
+                elif trade_type in ["sell", "s"]:
+                    pnl = (entry_price - ltp) * total_qty
                 else:
                     pnl = 0.0
                 
