@@ -80,7 +80,7 @@ def build_login_payload(login_id: str, password: str) -> dict:
     digits = raw[1:] if raw.startswith("+") else raw
     if digits.isdigit() and 8 <= len(digits) <= 15:
         return {"phone": raw, "password": password}
-    return {"username": raw, "password": password}
+    return {"username": raw.upper(), "password": password}
 
 def load_bots_config(json_path: str) -> list[dict]:
     with open(json_path, "r", encoding="utf-8") as f:
