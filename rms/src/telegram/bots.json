@@ -18,6 +18,11 @@
     "name": "Protrader",
     "token": "8573256279:AAHxBII9pZxTTntMROQ-RjYAvkKttkigAc4",
     "logo_path": "logo_protrader.jpg"
+  },
+  {
+    "name": "Share Angle",
+    "token": "8581897719:AAEkcx2BienT4l31Z_qQLoBmof43ndAxvLs",
+    "logo_path": "logo_shareangle.png"
   }
   
 ]
