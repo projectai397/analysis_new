@@ -158,14 +158,20 @@ def calculate_user_pnl(user_id: ObjectId) -> float:
                     continue
                 
                 symbol_info = symbol_data.get(symbol_id, {"ask": 0, "bid": 0, "ltp": 0})
-                buy_price = float(pos.get("buyPrice") or pos.get("price") or pos.get("open_price") or 0)
+                entry_price = float(pos.get("buyPrice") or pos.get("price") or pos.get("open_price") or 0)
                 total_quantity = float(pos.get("totalQuantity") or pos.get("quantity") or 0)
                 trade_type = str(pos.get("tradeType") or pos.get("orderType") or "").lower()
-                
+
+                # For BUY: we buy first, close by selling at bid. PnL = (bid - buyPrice) * qty
+                # For SELL: we sell first at entry_price, close by buying at ask. PnL = (sellPrice - ask) * qty
+                # Use ask as "buying price" to close the sell position
+                ask_price = symbol_info["ask"] or symbol_info["ltp"]
+                bid_price = symbol_info["bid"] or symbol_info["ltp"]
+
                 if trade_type == "buy":
-                    pnl = (symbol_info["bid"] - buy_price) * total_quantity
+                    pnl = (bid_price - entry_price) * total_quantity
                 elif trade_type == "sell":
-                    pnl = (symbol_info["ask"] - buy_price) * total_quantity
+                    pnl = (entry_price - ask_price) * total_quantity  # sellPrice - buyBackPrice
                 else:
                     pnl = 0.0
                 
