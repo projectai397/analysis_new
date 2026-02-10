@@ -158,21 +158,24 @@ def calculate_user_pnl(user_id: ObjectId) -> float:
                     continue
                 
                 symbol_info = symbol_data.get(symbol_id, {"ask": 0, "bid": 0, "ltp": 0})
-                # Use 'price' as entry price (same as positions.py) — buyPrice may be wrong for sell trades
+                # Entry price: prefer 'price' (site entry), then buyPrice/open_price
                 entry_price = float(pos.get("price") or pos.get("buyPrice") or pos.get("open_price") or 0)
                 quantity = float(pos.get("quantity") or pos.get("totalQuantity") or 0)
                 lot_size = float(pos.get("lotSize") or 1)
                 total_qty = quantity * lot_size
                 trade_type = str(pos.get("tradeType") or pos.get("orderType") or "").lower()
-                ltp = symbol_info["ltp"]
+                # Current price: use position-level price if set by backend (matches site "Current"), else symbol LTP
+                current_price = float(
+                    pos.get("lastPrice") or pos.get("ltp") or pos.get("currentPrice") or pos.get("markPrice") or 0
+                )
+                if not current_price:
+                    current_price = symbol_info["ltp"]
 
-                # Use LTP as current price (matching site / positions.py logic)
-                # BUY: bought at entry_price, current value at LTP → PnL = (ltp - entry) * qty
-                # SELL: sold at entry_price, current cost at LTP → PnL = (entry - ltp) * qty
+                # BUY: PnL = (current - entry) * qty. SELL: PnL = (entry - current) * qty
                 if trade_type in ["buy", "b"]:
-                    pnl = (ltp - entry_price) * total_qty
+                    pnl = (current_price - entry_price) * total_qty
                 elif trade_type in ["sell", "s"]:
-                    pnl = (entry_price - ltp) * total_qty
+                    pnl = (entry_price - current_price) * total_qty
                 else:
                     pnl = 0.0
                 
@@ -258,7 +261,8 @@ def generate_m2m_pdf(user_data_list: List[Dict[str, Any]]) -> BytesIO:
         textColor=colors.HexColor('#666666'),
         alignment=1,
     )
-    story.append(Paragraph(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", date_style))
+    generated_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    story.append(Paragraph(f"Generated: {generated_at}", date_style))
     story.append(Spacer(1, 0.3*inch))
     
     # Columns: Username | Parent | Balance | PnL | Asset Value | Credit

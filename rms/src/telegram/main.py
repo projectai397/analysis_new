@@ -408,6 +408,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     start_session_timer(update, context)
     return ASK_USERNAME
 
+def _normalize_login_id(login_id: str) -> str:
+    raw = login_id.strip()
+    digits = raw[1:] if raw.startswith("+") else raw
+    if digits.isdigit() and 8 <= len(digits) <= 15:
+        return raw
+    return raw.upper()
+
 async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     login_id = (update.message.text or "").strip()
     chat_id = update.effective_chat.id
@@ -425,7 +432,7 @@ async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if prompt_id is not None:
         await safe_delete_message(context.bot, chat_id, prompt_id)
 
-    context.user_data["login_id"] = login_id
+    context.user_data["login_id"] = _normalize_login_id(login_id)
 
     msg = await update.effective_chat.send_message(
         "🔐 <b>Enter your password.</b>",
