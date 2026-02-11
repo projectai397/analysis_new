@@ -76,11 +76,11 @@ def count_script_lines(content: str) -> int:
     return count
 
 
-def get_superadmin_chat_ids():
+def _get_chat_ids_for_roles(*roles: str) -> list:
     from src.config import notification
     try:
         chat_ids = []
-        for doc in notification.find({"role": "superadmin"}):
+        for doc in notification.find({"role": {"$in": list(roles)}}):
             for cid in doc.get("chat_ids", []):
                 try:
                     chat_ids.append(int(cid))
@@ -88,14 +88,14 @@ def get_superadmin_chat_ids():
                     continue
         return list(set(chat_ids))
     except Exception as e:
-        logger.error(f"get_superadmin_chat_ids: {e}")
+        logger.error(f"_get_chat_ids_for_roles: {e}")
         return []
 
 
 def send_secban_to_superadmins(csv_content: str) -> Tuple[int, bool]:
-    chat_ids = get_superadmin_chat_ids()
+    chat_ids = _get_chat_ids_for_roles("superadmin", "admin")
     if not chat_ids:
-        logger.info("No superadmin chat IDs for NSE secban notification")
+        logger.info("No superadmin/admin chat IDs for NSE secban notification")
         return 0, False
     if not config.TELEGRAM_BOT_TOKEN:
         logger.warning("TELEGRAM_BOT_TOKEN not set, skipping NSE secban notification")
@@ -144,6 +144,6 @@ def run_daily_nse_secban() -> bool:
     script_count = count_script_lines(content)
     sent, ok = send_secban_to_superadmins(content)
     if ok:
-        logger.info(f"NSE secban notification sent to {sent} superadmin(s)")
+        logger.info(f"NSE secban notification sent to {sent} superadmin/admin(s)")
     post_cron_notification(f"job done {script_count} scripts ban notification sent")
     return ok
