@@ -1,0 +1,12 @@
+[project]
+name = "tele"
+version = "0.1.0"
+description = "Telegram bot and notification server"
+requires-python = ">=3.10"
+
+[tool.pdm]
+distribution = false
+
+[tool.pdm.scripts]
+dev = "python run_services.py"
+start = "python run_services.py"

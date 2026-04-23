@@ -62,3 +62,5 @@ next-env.d.ts
 my_changes.patch
 rms/src/telegram/bots.json
 rms/backups
+tele/maps-key-*.json
+tele/*.json
