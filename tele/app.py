@@ -30,10 +30,7 @@ API_RATE_LIMIT = int(os.getenv("API_RATE_LIMIT", 10))
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "10"))
 
-if not all([GOOGLE_SA_JSON, SHEET_ID, BOT_TOKEN]):
-    raise RuntimeError("Missing required .env values")
-
-TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage" if BOT_TOKEN else None
 logger = logging.getLogger(__name__)
 
 # ================= FLASK APP =================
@@ -44,6 +41,8 @@ rate_state = {}  # ip -> {"count": int, "window_start": float}
 # ================= HELPERS =================
 def send_telegram(chat_id: str, text: str):
     try:
+        if not TG_API:
+            raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
         response = requests.post(
             TG_API,
             json={
@@ -92,6 +91,24 @@ def _infer_db_name(uri: str):
 
 
 PRO_DB = os.getenv("SOURCE_DB_NAME") or _infer_db_name(os.getenv("SOURCE_MONGO_URI"))
+
+def _get_gspread_client():
+    if not GOOGLE_SA_JSON or not SHEET_ID:
+        raise RuntimeError("Missing GOOGLE_SA_JSON / SHEET_ID env vars")
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds = Credentials.from_service_account_file(GOOGLE_SA_JSON, scopes=scopes)
+    return gspread.authorize(creds)
+
+
+def _get_website_ws(gc):
+    return gc.open_by_key(SHEET_ID).worksheet(WEBSITE_SHEET_NAME)
+
+
+def _get_billing_ws(gc):
+    return gc.open_by_key(SHEET_ID).worksheet(BILLING_SHEET_NAME)
 
 
 def backup_mongo_to_archive(
@@ -280,22 +297,13 @@ def upload_backup_to_s3(
             "error": str(e),
         }
 
-def send_notifications():
-    print("Starting to send notifications...")
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
+def _fetch_websites_and_subscribers():
+    gc = _get_gspread_client()
+    website_ws = _get_website_ws(gc)
 
-    creds = Credentials.from_service_account_file(GOOGLE_SA_JSON, scopes=scopes)
-    gc = gspread.authorize(creds)
-    website_ws = gc.open_by_key(SHEET_ID).worksheet(WEBSITE_SHEET_NAME)
-    billing_ws = gc.open_by_key(SHEET_ID).worksheet(BILLING_SHEET_NAME)
-
-    # Fetching website details and subscribers
     website_rows = website_ws.get_all_records()
-    websites = []
-    subscribers = set()
+    websites: list[tuple[str, str]] = []
+    subscribers: set[str] = set()
 
     for r in website_rows:
         name = str(r.get("name", "")).strip()
@@ -304,50 +312,56 @@ def send_notifications():
 
         if name and url:
             websites.append((name, url))
-
         if sub:
             subscribers.add(sub)
 
-    # Website status check notifications
+    return websites, subscribers
+
+
+def send_website_notifications():
+    print("Starting website checks...")
+    websites, subscribers = _fetch_websites_and_subscribers()
+
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     for name, url in websites:
         up, detail = check_website(url)
 
-        # Get last status and time of first "down" notification
         last_status = website_status_cache.get(url, {}).get("status", None)
         last_down_time = website_status_cache.get(url, {}).get("time", None)
 
-        # If website was down and time passed is greater than 10 minutes, send a new "down" notification
         if last_status == "down" and last_down_time and (datetime.now() - last_down_time).total_seconds() >= 600:
             if not up:
                 msg = f"❌ <b>{name}</b> is STILL DOWN\n{url}\nChecked: {now}"
                 for chat_id in subscribers:
                     send_telegram(chat_id, msg)
-                website_status_cache[url]["time"] = datetime.now()  # Update the time of last down notification
+                website_status_cache[url]["time"] = datetime.now()
         elif last_status != "down" and not up:
-            # Send the first "down" notification if it wasn't previously down
             msg = f"❌ <b>{name}</b> is NOW DOWN\n{url}\nChecked: {now}"
             for chat_id in subscribers:
                 send_telegram(chat_id, msg)
             website_status_cache[url] = {"status": "down", "time": datetime.now()}
         elif last_status == "down" and up:
-            # If website is back up, send the "working" notification
             msg = f"✅ <b>{name}</b> is NOW WORKING\n{url}\nChecked: {now}"
             for chat_id in subscribers:
                 send_telegram(chat_id, msg)
-            website_status_cache[url] = {"status": "working", "time": None}  # Reset status when it's working
+            website_status_cache[url] = {"status": "working", "time": None}
 
-    # --- BILLING SECTION ---
+    print("Website checks done.")
+
+
+def send_billing_notifications():
+    print("Starting billing reminders...")
+    gc = _get_gspread_client()
+    billing_ws = _get_billing_ws(gc)
+    _, subscribers = _fetch_websites_and_subscribers()
+
     billing_rows = billing_ws.get_all_records()
 
-    # Normalize today to midnight
     today = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
     one_day_ahead = today + timedelta(days=1)
     two_days_ahead = today + timedelta(days=2)
 
-    # Track time for when each notification is sent for each provider
     for billing_row in billing_rows:
-        # Match uppercase headers from your sheet
         provider = str(billing_row.get("PROVIDER", "")).strip()
         billing_date_str = str(billing_row.get("BILLING DATE", "")).strip()
 
@@ -355,50 +369,40 @@ def send_notifications():
             continue
 
         try:
-            # Extract day number
             day_num_str = "".join(filter(str.isdigit, billing_date_str))
             if not day_num_str:
                 continue
-            
+
             day_num = int(day_num_str)
             _, last_day = calendar.monthrange(today.year, today.month)
             day_num = min(day_num, last_day)
             billing_day = today.replace(day=day_num)
 
-            # Check if 8 hours have passed since the last reminder for this billing day
-            last_reminder_time = billing_notification_cache.get(provider, {}).get(billing_day.strftime('%Y-%m-%d'), None)
+            last_reminder_time = billing_notification_cache.get(provider, {}).get(billing_day.strftime("%Y-%m-%d"), None)
             if last_reminder_time and (datetime.now() - last_reminder_time).total_seconds() < 28800:
-                continue  # Skip if a notification was already sent in the last 8 hours
+                continue
 
-            # Formatting the text with HTML <b> tags
             formatted_date = f"<b>{billing_day.strftime('%d %B, %Y')}</b>"
             provider_bold = f"<b>{provider}</b>"
 
-            # Reminders with bolded status and date
             if billing_day == today:
                 msg = f"🔔 Reminder: The billing date for {provider_bold} is <b>TODAY</b>, {formatted_date}"
-                for chat_id in subscribers:
-                    send_telegram(chat_id, msg)
-
             elif billing_day == one_day_ahead:
                 msg = f"⏳ Reminder: The billing date for {provider_bold} is <b>TOMORROW</b>, {formatted_date}"
-                for chat_id in subscribers:
-                    send_telegram(chat_id, msg)
-
             elif billing_day == two_days_ahead:
                 msg = f"🗓️ Reminder: The billing date for {provider_bold} is in <b>2 days</b>, {formatted_date}"
-                for chat_id in subscribers:
-                    send_telegram(chat_id, msg)
             else:
                 continue
 
-            billing_notification_cache.setdefault(provider, {})[billing_day.strftime('%Y-%m-%d')] = datetime.now()
+            for chat_id in subscribers:
+                send_telegram(chat_id, msg)
 
+            billing_notification_cache.setdefault(provider, {})[billing_day.strftime("%Y-%m-%d")] = datetime.now()
         except Exception:
             print(f"Skipping invalid billing date for {provider}: {billing_date_str}")
             continue
 
-    print("Notifications sent.")
+    print("Billing reminders done.")
 
 
 # ================= API ENDPOINT =================
@@ -458,13 +462,46 @@ def trigger_success_notification():
     ), 202
 
 
+@app.route("/run_checks", methods=["POST"])
+def trigger_checks():
+    provided_token = request.headers.get("X-Auth-Token")
+    secret_token = os.getenv("STATIC_TOKEN")
+
+    if not provided_token or provided_token != secret_token:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.get_json(silent=True) or {}
+    mode = str(data.get("mode", "website")).strip().lower()
+
+    if mode not in {"website", "billing", "all"}:
+        return jsonify({"error": "Invalid mode. Use website|billing|all"}), 400
+
+    if mode in {"website", "all"}:
+        _run_async(send_website_notifications, "webcheck-manual")
+    if mode in {"billing", "all"}:
+        _run_async(send_billing_notifications, "billing-manual")
+
+    return jsonify({"status": "accepted", "mode": mode}), 202
+
+
 # ================= SCHEDULE =================
 def check_websites_periodically():
     print("Checking websites periodically...")  # Debugging line
-    send_notifications()  # This will run your website checking function
+    try:
+        send_website_notifications()
+    except Exception:
+        # Never let scheduler die due to Sheets/Telegram issues
+        logger.exception("[webcheck] send_notifications failed")
+
+def _run_sync_job(fn, label: str):
+    try:
+        fn()
+    except Exception:
+        logger.exception("[%s] failed", label)
 
 # Schedule the job every 1 minute (to check websites)
-schedule.every(1).minute.do(check_websites_periodically)
+schedule.every(1).minute.do(lambda: _run_sync_job(check_websites_periodically, "webcheck-01"))
+schedule.every(1).hour.do(lambda: _run_async(send_billing_notifications, "billing-02"))
 
 
 def _run_async(fn, label: str = "job"):
@@ -532,7 +569,11 @@ schedule.every().day.at("00:15").do(lambda: _run_async(_daily_cleanup_job, "clea
 
 def run_schedule():
     while True:
-        schedule.run_pending()
+        try:
+            schedule.run_pending()
+        except Exception:
+            # schedule can propagate job exceptions; do not let this thread stop
+            logger.exception("[scheduler] run_pending crashed")
         time.sleep(1)  # Sleep for a while to prevent CPU overload
 
 
