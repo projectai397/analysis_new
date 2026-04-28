@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import glob
 import logging
+import socket
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 import calendar
@@ -32,6 +33,99 @@ TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "10"))
 
 TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage" if BOT_TOKEN else None
 logger = logging.getLogger(__name__)
+
+def _human_bytes(num_bytes: int | None) -> str:
+    if num_bytes is None:
+        return "unknown"
+    try:
+        n = float(num_bytes)
+    except Exception:
+        return "unknown"
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if n < 1024.0 or unit == "TB":
+            if unit == "B":
+                return f"{int(n)} {unit}"
+            return f"{n:.2f} {unit}"
+        n /= 1024.0
+    return "unknown"
+
+
+def _now_stamp() -> str:
+    # Local time with offset, ex: 2026-04-28 11:29:03 +05:30
+    return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+
+
+def _host_name() -> str:
+    try:
+        return socket.gethostname()
+    except Exception:
+        return "unknown-host"
+
+
+def _post_notification(message: str) -> None:
+    notif_url = os.environ.get("NOTIFICATION_URL")
+    auth_token = os.environ.get("STATIC_TOKEN")
+    if not (notif_url and auth_token):
+        logger.error("Missing NOTIFICATION_URL or STATIC_TOKEN in .env")
+        return
+
+    headers = {"X-Auth-Token": auth_token, "Content-Type": "application/json"}
+    payload = {"message": message}
+    try:
+        notif_res = requests.post(notif_url, json=payload, headers=headers, timeout=60)
+        if notif_res.status_code in (200, 202):
+            logger.info("Notification sent to %s (status=%s)", notif_url, notif_res.status_code)
+        else:
+            logger.warning(
+                "Notification failed (Status %s): %s",
+                notif_res.status_code,
+                notif_res.text,
+            )
+    except requests.exceptions.Timeout:
+        logger.error("Notification timeout at %s.", notif_url)
+    except requests.exceptions.RequestException as req_e:
+        logger.error("Notification network error: %s", req_e)
+
+
+def _db_upload_message(
+    *,
+    ok: bool,
+    size_bytes: int | None,
+    bucket: str | None,
+    key: str | None,
+    archive_path: str | None,
+    error: str | None,
+) -> str:
+    ts = _now_stamp()
+    host = _host_name()
+    size_str = _human_bytes(size_bytes)
+
+    if ok:
+        return (
+            "✅ <b>Database upload complete</b>\n"
+            f"Time: {ts}\n"
+            f"Host: {host}\n"
+            f"Size: {size_str}\n"
+            f"S3: <code>s3://{bucket}/{key}</code>"
+        )
+
+    details = error or "Unknown error"
+    extra = []
+    if archive_path:
+        extra.append(f"Archive: <code>{archive_path}</code>")
+    if bucket and key:
+        extra.append(f"S3 target: <code>s3://{bucket}/{key}</code>")
+    if size_bytes is not None:
+        extra.append(f"Size: {size_str}")
+    extra_block = ("\n" + "\n".join(extra)) if extra else ""
+
+    return (
+        "🔴 <b>Database upload failed</b>\n"
+        f"Time: {ts}\n"
+        f"Host: {host}\n"
+        f"Error: <code>{details}</code>"
+        f"{extra_block}"
+    )
 
 # ================= FLASK APP =================
 app = Flask(__name__)
@@ -196,8 +290,19 @@ def upload_backup_to_s3(
     date_str = date_str or datetime.now().strftime("%Y-%m-%d")
     root = Path(out_root).resolve()
     archive_path = root / f"{date_str}.zip"
+    size_bytes: int | None = None
 
     if not archive_path.exists():
+        _post_notification(
+            _db_upload_message(
+                ok=False,
+                size_bytes=None,
+                bucket=bucket or os.environ.get("S3_BUCKET"),
+                key=None,
+                archive_path=str(archive_path),
+                error=f"No ZIP archive found for {date_str} at {archive_path}",
+            )
+        )
         return {
             "ok": False,
             "date": date_str,
@@ -209,6 +314,20 @@ def upload_backup_to_s3(
 
     bucket = bucket or os.environ.get("S3_BUCKET")
     if not bucket:
+        try:
+            size_bytes = archive_path.stat().st_size
+        except Exception:
+            size_bytes = None
+        _post_notification(
+            _db_upload_message(
+                ok=False,
+                size_bytes=size_bytes,
+                bucket=None,
+                key=None,
+                archive_path=str(archive_path),
+                error="S3 bucket not set (S3_BUCKET)",
+            )
+        )
         return {
             "ok": False,
             "date": date_str,
@@ -221,36 +340,25 @@ def upload_backup_to_s3(
     key = f"{s3_prefix}/{archive_path.name}"
 
     try:
+        try:
+            size_bytes = archive_path.stat().st_size
+        except Exception:
+            size_bytes = None
+
         s3 = _s3_client()
         logger.info("[backup] Uploading %s -> s3://%s/%s", archive_path, bucket, key)
         s3.upload_file(str(archive_path), bucket, key)
 
-        notif_url = os.environ.get("NOTIFICATION_URL")
-        auth_token = os.environ.get("STATIC_TOKEN")
-        if notif_url and auth_token:
-            headers = {"X-Auth-Token": auth_token, "Content-Type": "application/json"}
-            payload = {"message": "database upload complete"}
-            try:
-                notif_res = requests.post(
-                    notif_url,
-                    json=payload,
-                    headers=headers,
-                    timeout=60,
-                )
-                if notif_res.status_code == 200:
-                    logger.info("Database backup upload complete notification sent.")
-                else:
-                    logger.warning(
-                        "Notification failed (Status %s): %s",
-                        notif_res.status_code,
-                        notif_res.text,
-                    )
-            except requests.exceptions.Timeout:
-                logger.error("Notification timeout at %s.", notif_url)
-            except requests.exceptions.RequestException as req_e:
-                logger.error("Notification network error: %s", req_e)
-        else:
-            logger.error("Missing NOTIFICATION_URL or STATIC_TOKEN in .env")
+        _post_notification(
+            _db_upload_message(
+                ok=True,
+                size_bytes=size_bytes,
+                bucket=bucket,
+                key=key,
+                archive_path=str(archive_path),
+                error=None,
+            )
+        )
 
         return {
             "ok": True,
@@ -261,6 +369,16 @@ def upload_backup_to_s3(
             "error": None,
         }
     except FileNotFoundError:
+        _post_notification(
+            _db_upload_message(
+                ok=False,
+                size_bytes=size_bytes,
+                bucket=bucket,
+                key=key,
+                archive_path=str(archive_path),
+                error="Archive file not found",
+            )
+        )
         return {
             "ok": False,
             "date": date_str,
@@ -270,6 +388,16 @@ def upload_backup_to_s3(
             "error": "Archive file not found",
         }
     except NoCredentialsError:
+        _post_notification(
+            _db_upload_message(
+                ok=False,
+                size_bytes=size_bytes,
+                bucket=bucket,
+                key=key,
+                archive_path=str(archive_path),
+                error="AWS credentials not found/invalid",
+            )
+        )
         return {
             "ok": False,
             "date": date_str,
@@ -279,6 +407,16 @@ def upload_backup_to_s3(
             "error": "AWS credentials not found/invalid",
         }
     except ClientError as e:
+        _post_notification(
+            _db_upload_message(
+                ok=False,
+                size_bytes=size_bytes,
+                bucket=bucket,
+                key=key,
+                archive_path=str(archive_path),
+                error=f"AWS error: {e}",
+            )
+        )
         return {
             "ok": False,
             "date": date_str,
@@ -288,6 +426,16 @@ def upload_backup_to_s3(
             "error": f"AWS error: {e}",
         }
     except Exception as e:
+        _post_notification(
+            _db_upload_message(
+                ok=False,
+                size_bytes=size_bytes,
+                bucket=bucket,
+                key=key,
+                archive_path=str(archive_path),
+                error=str(e),
+            )
+        )
         return {
             "ok": False,
             "date": date_str,
