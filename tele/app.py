@@ -105,16 +105,13 @@ def _db_upload_message(
             "✅ <b>Database upload complete</b>\n"
             f"Time: {ts}\n"
             f"Host: {host}\n"
-            f"Size: {size_str}\n"
-            f"S3: <code>s3://{bucket}/{key}</code>"
+            f"Size: {size_str}"
         )
 
     details = error or "Unknown error"
     extra = []
     if archive_path:
         extra.append(f"Archive: <code>{archive_path}</code>")
-    if bucket and key:
-        extra.append(f"S3 target: <code>s3://{bucket}/{key}</code>")
     if size_bytes is not None:
         extra.append(f"Size: {size_str}")
     extra_block = ("\n" + "\n".join(extra)) if extra else ""
@@ -632,6 +629,39 @@ def trigger_checks():
     return jsonify({"status": "accepted", "mode": mode}), 202
 
 
+@app.route("/trigger_backup_upload", methods=["POST"])
+def trigger_backup_upload():
+    """Same auth + rate limit as /send_notifications; runs mongodump → zip → S3 in the background."""
+    provided_token = request.headers.get("X-Auth-Token")
+    secret_token = os.getenv("STATIC_TOKEN")
+
+    if not provided_token or provided_token != secret_token:
+        print("Unauthorized access attempt (trigger_backup_upload): Invalid Token")
+        return jsonify({"error": "Unauthorized"}), 401
+
+    ip = request.remote_addr or "unknown"
+    now = time.time()
+
+    st = rate_state.get(ip)
+    if not st or (now - st["window_start"]) >= RATE_WINDOW_SECONDS:
+        st = {"count": 0, "window_start": now}
+
+    st["count"] += 1
+    rate_state[ip] = st
+
+    if st["count"] > API_RATE_LIMIT:
+        return jsonify({"error": "Rate limit exceeded."}), 429
+
+    _run_async(_manual_backup_upload_pipeline, "manual-backup-upload")
+
+    return jsonify(
+        {
+            "status": "accepted",
+            "message": "Backup and S3 upload started.",
+        }
+    ), 202
+
+
 # ================= SCHEDULE =================
 def check_websites_periodically():
     print("Checking websites periodically...")  # Debugging line
@@ -691,6 +721,35 @@ def _daily_upload_job():
             logger.error("Daily upload failed -> %s", res_up.get("error"))
     except Exception as e:
         logger.exception("Daily upload crashed: %s", e)
+
+
+def _manual_backup_upload_pipeline():
+    """One-shot: same steps as scheduled backup (00:00) then upload (00:10), in sequence."""
+    try:
+        db_name = PRO_DB or os.getenv("SOURCE_DB_NAME")
+        if not db_name:
+            logger.error("Manual backup-upload: SOURCE_DB_NAME (or URI DB name) not resolved")
+            return
+
+        res = backup_mongo_to_archive([db_name], out_root="backups")
+        if res.get("ok"):
+            logger.info("Manual backup done -> %s (%s)", res["archive_path"], res["used_format"])
+        else:
+            logger.error("Manual backup failed -> %s", res.get("error"))
+
+        date_str = res.get("date") or datetime.now().strftime("%Y-%m-%d")
+        res_up = upload_backup_to_s3(
+            date_str=date_str,
+            out_root="backups",
+            bucket=None,
+            s3_prefix="mongo_backup",
+        )
+        if res_up.get("ok"):
+            logger.info("Manual upload done -> s3://%s/%s", res_up["bucket"], res_up["key"])
+        else:
+            logger.error("Manual upload failed -> %s", res_up.get("error"))
+    except Exception:
+        logger.exception("Manual backup-upload pipeline crashed")
 
 
 def _daily_cleanup_job():

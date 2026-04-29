@@ -20,7 +20,7 @@ Example `message` body:
 Example (database upload success):
 ```json
 {
-  "message": "✅ <b>Database upload complete</b>\nTime: 2026-04-28 11:29:03 +0530\nHost: server-01\nSize: 2.50 GB\nS3: <code>s3://my-bucket/mongo_backup/2026-04-28.zip</code>"
+  "message": "✅ <b>Database upload complete</b>\nTime: 2026-04-28 11:29:03 +0530\nHost: server-01\nSize: 2.50 GB"
 }
 ```
 
