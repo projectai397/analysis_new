@@ -14,6 +14,8 @@ import html
 from datetime import datetime, timedelta, timezone
 import os
 import logging
+import base64
+import uuid
 import httpx
 from bson import ObjectId
 import schedule
@@ -76,11 +78,50 @@ USER_SESSION_EXPIRES: Dict[int, float] = {}
 SESSION_TIMEOUT_SECONDS = 600 
 
 def build_login_payload(login_id: str, password: str) -> dict:
-    raw = login_id.strip()
-    digits = raw[1:] if raw.startswith("+") else raw
-    if digits.isdigit() and 8 <= len(digits) <= 15:
-        return {"phone": raw, "password": password}
-    return {"username": raw.upper(), "password": password}
+    # Match the web login payload shape (per screenshot).
+    # You can override these via env vars if your API requires specific values.
+    domain = os.getenv("RMS_LOGIN_DOMAIN", "admin.500x.exchange")
+    ip_address = (os.getenv("RMS_LOGIN_IP") or "").strip() or "127.0.0.1"
+    user_agent = os.getenv(
+        "RMS_LOGIN_USER_AGENT",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+    )
+
+    device_id = (os.getenv("RMS_LOGIN_DEVICE_ID") or "").strip() or str(uuid.uuid4())
+    device_token = (os.getenv("RMS_LOGIN_DEVICE_TOKEN") or "").strip() or device_id
+
+    return {
+        "serverId": "",
+        "domain": domain,
+        "loginBy": "Web",
+        "browser": "Chrome",
+        "deviceId": device_id,
+        "deviceToken": device_token,
+        "deviceType": "web",
+        "ipAddress": ip_address,
+        "isBrokerLogin": 0,
+        "userAgent": user_agent,
+    }
+
+def build_gateway_basic_auth(login_id: str, password: str) -> str | None:
+    """
+    Gateway expects: Authorization: Basic base64("admin:username:password")
+    - username/password are the RAW values the user typed (not the Base64-encoded body fields)
+    - "admin" prefix can be overridden with RMS_BASIC_PREFIX
+    - you can also override the full header via RMS_BASIC_AUTH (with or without "Basic ")
+    """
+    raw = (os.getenv("RMS_BASIC_AUTH") or "").strip()
+    if raw:
+        return raw if raw.lower().startswith("basic ") else f"Basic {raw}"
+
+    u = (login_id or "").strip()
+    p = (password or "").strip()
+    if not u or not p:
+        return None
+
+    prefix = (os.getenv("RMS_BASIC_PREFIX") or "admin").strip() or "admin"
+    token = base64.b64encode(f"{prefix}:{u}:{p}".encode("utf-8")).decode("ascii")
+    return f"Basic {token}"
 
 def load_bots_config(json_path: str) -> list[dict]:
     with open(json_path, "r", encoding="utf-8") as f:
@@ -474,7 +515,11 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     try:
         async with httpx.AsyncClient(base_url=config.RMS_API_BASE_URL, timeout=10) as client:
-            resp = await client.post("/api/v1/user/auth", json=payload)
+            headers = {}
+            auth = build_gateway_basic_auth(login_id, password)
+            if auth:
+                headers["Authorization"] = auth
+            resp = await client.post("/api/v1/user/auth", json=payload, headers=headers or None)
     except Exception as e:
         logger.error(e)
         context.user_data["is_logging_in"] = False
@@ -493,16 +538,46 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return ConversationHandler.END
 
     data = resp.json()
-    if not data.get("ok"):
+
+    # Support new gateway response:
+    # {
+    #   "meta": {"message": "...", "token": "<jwt>"},
+    #   "data": {...user...},
+    #   "statusCode": 200
+    # }
+    ok = False
+    token = None
+    user = None
+
+    if isinstance(data, dict):
+        status_code = data.get("statusCode")
+        meta = data.get("meta") or {}
+        if status_code == 200 and isinstance(meta, dict) and meta.get("token"):
+            ok = True
+            token = meta.get("token")
+            user = data.get("data") or {}
+        elif data.get("ok") and data.get("access_token") and data.get("user"):
+            # Backward-compat with older response format
+            ok = True
+            token = data.get("access_token")
+            user = data.get("user") or {}
+
+    if not ok or not token or not isinstance(user, dict):
         context.user_data["is_logging_in"] = False
         context.user_data.pop("login_id", None)
         context.user_data.pop("login_prompt_msg_id", None)
         context.user_data.pop("password_prompt_msg_id", None)
-        await info_msg.edit_text("❌ Invalid credentials.")
+        msg = None
+        try:
+            msg = (data.get("meta") or {}).get("message") if isinstance(data, dict) else None
+        except Exception:
+            msg = None
+        await info_msg.edit_text(f"❌ {msg or 'Invalid credentials.'}")
         return ConversationHandler.END
 
-    token = data["access_token"]
-    user = data["user"]
+    # normalize common id fields used elsewhere in the bot
+    if "id" not in user and "userId" in user:
+        user["id"] = user.get("userId")
 
     session_store.set_session(update, context, token, user)
 
