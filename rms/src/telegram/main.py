@@ -163,12 +163,27 @@ def role_name_from_user(user: dict) -> str:
     if not user:
         return ""
 
+    # New gateway response includes roleName like "superAdmin"
+    rn = user.get("roleName") or user.get("role_name")
+    if rn:
+        return str(rn).lower()
+
     # Check the ObjectId stored in the 'role' field
     role_id = user.get("role")
     
     # Ensure role_id is an ObjectId before comparison
     if isinstance(role_id, dict) and '$oid' in role_id:
         role_id = ObjectId(role_id['$oid'])
+
+    # If role is a string id, compare with known role ObjectIds too
+    if isinstance(role_id, str):
+        rid = role_id.strip()
+        if rid == str(SUPERADMIN_ROLE_ID):
+            return "superadmin"
+        if rid == str(ADMIN_ROLE_ID):
+            return "admin"
+        if rid == str(MASTER_ROLE_ID):
+            return "master"
     
     if role_id == SUPERADMIN_ROLE_ID:
         return "superadmin"
@@ -178,8 +193,8 @@ def role_name_from_user(user: dict) -> str:
         return "master"
     else:
         # Fallback to the original logic if the role is a string/other
-        rn = user.get("role_name") or user.get("role") or ""
-        return str(rn).lower()
+        rn2 = user.get("role") or ""
+        return str(rn2).lower()
 
 def get_trading_button_from_context(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardButton | None:
     url = (context.application.bot_data.get("trading_url") or "").strip()
@@ -519,7 +534,14 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             auth = build_gateway_basic_auth(login_id, password)
             if auth:
                 headers["Authorization"] = auth
+            logger.info("LOGIN DEBUG payload=%s", json.dumps(payload, ensure_ascii=False))
+            logger.info("LOGIN DEBUG Authorization=%s", headers.get("Authorization"))
             resp = await client.post("/api/v1/user/auth", json=payload, headers=headers or None)
+            try:
+                logger.info("LOGIN DEBUG response_status=%s", resp.status_code)
+                logger.info("LOGIN DEBUG response_body=%s", resp.text)
+            except Exception:
+                pass
     except Exception as e:
         logger.error(e)
         context.user_data["is_logging_in"] = False
@@ -597,7 +619,8 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     await info_msg.edit_text(
     "🎉 <b>Login Successful!</b>\n"
-    f"User: <code>{html.escape(str(user.get('username') or user.get('phone') or ''))}</code>\n\n"
+    f"Name: <code>{html.escape(str(user.get('name') or ''))}</code>\n"
+    f"UserName: <code>{html.escape(str(user.get('userName') or user.get('username') or user.get('phone') or ''))}</code>\n\n"
     "Now you can use:\n"
     "• <code>/users</code>\n"
     "• <code>/position</code>\n"
