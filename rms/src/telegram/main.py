@@ -474,7 +474,7 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     try:
         async with httpx.AsyncClient(base_url=config.RMS_API_BASE_URL, timeout=10) as client:
-            resp = await client.post("/auth/login", json=payload)
+            resp = await client.post("/api/v1/user/auth", json=payload)
     except Exception as e:
         logger.error(e)
         context.user_data["is_logging_in"] = False
