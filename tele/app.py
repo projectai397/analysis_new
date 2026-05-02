@@ -8,7 +8,7 @@ import glob
 import logging
 import socket
 from google.oauth2.service_account import Credentials
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import calendar
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
@@ -34,6 +34,10 @@ TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "10"))
 TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage" if BOT_TOKEN else None
 logger = logging.getLogger(__name__)
 
+# Indian Standard Time (UTC+05:30; India does not observe DST).
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
 def _human_bytes(num_bytes: int | None) -> str:
     if num_bytes is None:
         return "unknown"
@@ -51,8 +55,8 @@ def _human_bytes(num_bytes: int | None) -> str:
 
 
 def _now_stamp() -> str:
-    # Local time with offset, ex: 2026-04-28 11:29:03 +05:30
-    return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+    # Always IST for backup notifications, ex: 2026-04-28 11:29:03 +0530
+    return datetime.now(_IST).strftime("%Y-%m-%d %H:%M:%S %z")
 
 
 def _host_name() -> str:
