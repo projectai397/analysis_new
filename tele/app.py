@@ -133,6 +133,46 @@ app = Flask(__name__)
 rate_limit = defaultdict(int)
 RATE_WINDOW_SECONDS = 60
 rate_state = {}  # ip -> {"count": int, "window_start": float}
+
+APPROVE_COLUMN_INDEX = 4
+APPROVE_COLUMN_HEADER = "approve"
+APPROVED_SUBSCRIBER_VALUES = {"true", "yes", "y", "1", "approved"}
+
+
+def _ensure_approve_header(ws) -> None:
+    headers = [str(h).strip().lower() for h in ws.row_values(1)]
+    if APPROVE_COLUMN_HEADER in headers or "approved" in headers:
+        return
+
+    if len(headers) >= APPROVE_COLUMN_INDEX and headers[APPROVE_COLUMN_INDEX - 1]:
+        logger.warning("Expected subscriber approval column D to be named 'approve'.")
+        return
+
+    ws.update_cell(1, APPROVE_COLUMN_INDEX, APPROVE_COLUMN_HEADER)
+
+
+def _row_value(row: dict, *column_names: str) -> str:
+    normalized = {str(k).strip().lower(): v for k, v in row.items()}
+    for column_name in column_names:
+        value = normalized.get(column_name.strip().lower())
+        if value is not None:
+            return str(value).strip()
+    return ""
+
+
+def _is_approved(value: str) -> bool:
+    return str(value).strip().lower() in APPROVED_SUBSCRIBER_VALUES
+
+
+def _approved_subscribers_from_rows(rows: list[dict]) -> set[str]:
+    subscribers: set[str] = set()
+    for row in rows:
+        subscriber = _row_value(row, "subscriber")
+        approve = _row_value(row, "approve", "approved")
+        if subscriber and _is_approved(approve):
+            subscribers.add(subscriber)
+    return subscribers
+
 # ================= HELPERS =================
 def send_telegram(chat_id: str, text: str):
     try:
@@ -449,20 +489,20 @@ def upload_backup_to_s3(
 def _fetch_websites_and_subscribers():
     gc = _get_gspread_client()
     website_ws = _get_website_ws(gc)
+    _ensure_approve_header(website_ws)
 
     website_rows = website_ws.get_all_records()
     websites: list[tuple[str, str]] = []
     subscribers: set[str] = set()
 
     for r in website_rows:
-        name = str(r.get("name", "")).strip()
-        url = str(r.get("url", "")).strip()
-        sub = str(r.get("subscriber", "")).strip()
+        name = _row_value(r, "name")
+        url = _row_value(r, "url")
 
         if name and url:
             websites.append((name, url))
-        if sub:
-            subscribers.add(sub)
+
+    subscribers = _approved_subscribers_from_rows(website_rows)
 
     return websites, subscribers
 
@@ -581,17 +621,15 @@ def trigger_success_notification():
     if st["count"] > API_RATE_LIMIT:
         return jsonify({"error": "Rate limit exceeded."}), 429
 
-    # 3. Fetching subscribers
-    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_file(GOOGLE_SA_JSON, scopes=scopes)
-    gc = gspread.authorize(creds)
-    website_ws = gc.open_by_key(SHEET_ID).worksheet(WEBSITE_SHEET_NAME)
-
+    # 3. Fetching approved subscribers
+    gc = _get_gspread_client()
+    website_ws = _get_website_ws(gc)
+    _ensure_approve_header(website_ws)
     website_rows = website_ws.get_all_records()
-    subscribers = {str(r.get("subscriber", "")).strip() for r in website_rows if r.get("subscriber")}
+    subscribers = _approved_subscribers_from_rows(website_rows)
 
     if not subscribers:
-        return jsonify({"message": "No subscribers found."}), 404
+        return jsonify({"message": "No approved subscribers found."}), 404
 
     # 4. Get Message Body
     data = request.get_json(silent=True) or {}

@@ -17,6 +17,19 @@ GOOGLE_SA_JSON = os.environ["GOOGLE_SA_JSON"]
 SHEET_ID = os.environ["SHEET_ID"]
 WORKSHEET_NAME = os.getenv("WORKSHEET_NAME", "Sheet1")
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+APPROVE_COLUMN_INDEX = 4
+APPROVE_COLUMN_HEADER = "approve"
+
+
+def ensure_approve_header(ws) -> None:
+    headers = [str(h).strip().lower() for h in ws.row_values(1)]
+    if APPROVE_COLUMN_HEADER in headers or "approved" in headers:
+        return
+
+    if len(headers) >= APPROVE_COLUMN_INDEX and headers[APPROVE_COLUMN_INDEX - 1]:
+        return
+
+    ws.update_cell(1, APPROVE_COLUMN_INDEX, APPROVE_COLUMN_HEADER)
 
 # ===== Google Sheet client (cached) =====
 def get_worksheet():
@@ -27,6 +40,7 @@ def get_worksheet():
     creds = Credentials.from_service_account_file(GOOGLE_SA_JSON, scopes=scopes)
     gc = gspread.authorize(creds)
     ws = gc.open_by_key(SHEET_ID).worksheet(WORKSHEET_NAME)
+    ensure_approve_header(ws)
     return ws
 
 # Find if chat_id already exists in subscriber column (C)
@@ -36,9 +50,9 @@ def is_subscribed(ws, chat_id: str) -> bool:
     chat_id = str(chat_id).strip()
     return chat_id in [c.strip() for c in col if c.strip()]
 
-# Append subscriber chat_id in a new row (A,B empty, C filled)
+# Append subscriber chat_id in a new row (A,B empty, C filled, D pending approval)
 def add_subscriber(ws, chat_id: str) -> None:
-    ws.append_row(["", "", str(chat_id)], value_input_option="RAW")
+    ws.append_row(["", "", str(chat_id), "false"], value_input_option="RAW")
 
 # Optional: remove subscriber (all matches)
 def remove_subscriber(ws, chat_id: str) -> int:
