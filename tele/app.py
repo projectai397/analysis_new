@@ -1,3 +1,5 @@
+import html
+import json
 import os
 import requests
 import gspread
@@ -203,9 +205,21 @@ def check_website(url: str):
         r = requests.get(url, timeout=TIMEOUT, allow_redirects=True)
         if 200 <= r.status_code < 400:
             return True, f"HTTP {r.status_code}"
-        return False, f"HTTP {r.status_code}"
-    except requests.exceptions.RequestException:
-        return False, "Connection error / timeout"
+
+        detail = f"HTTP {r.status_code}"
+        body = (r.text or "").strip()
+        if body:
+            try:
+                body = json.dumps(r.json(), indent=2)
+            except Exception:
+                pass
+            if len(body) > 500:
+                body = body[:500] + "..."
+            detail += f"\nResponse: {body}"
+
+        return False, detail
+    except requests.exceptions.RequestException as e:
+        return False, f"Connection error / timeout: {e}"
 
 
 # ================= MAIN =================
@@ -520,12 +534,24 @@ def send_website_notifications():
 
         if last_status == "down" and last_down_time and (datetime.now() - last_down_time).total_seconds() >= 600:
             if not up:
-                msg = f"❌ <b>{name}</b> is STILL DOWN\n{url}\nChecked: {now}"
+                escaped_detail = html.escape(detail)
+                msg = (
+                    f"❌ <b>{name}</b> is STILL DOWN\n"
+                    f"{url}\n"
+                    f"Reason: <code>{escaped_detail}</code>\n"
+                    f"Checked: {now}"
+                )
                 for chat_id in subscribers:
                     send_telegram(chat_id, msg)
                 website_status_cache[url]["time"] = datetime.now()
         elif last_status != "down" and not up:
-            msg = f"❌ <b>{name}</b> is NOW DOWN\n{url}\nChecked: {now}"
+            escaped_detail = html.escape(detail)
+            msg = (
+                f"❌ <b>{name}</b> is NOW DOWN\n"
+                f"{url}\n"
+                f"Reason: <code>{escaped_detail}</code>\n"
+                f"Checked: {now}"
+            )
             for chat_id in subscribers:
                 send_telegram(chat_id, msg)
             website_status_cache[url] = {"status": "down", "time": datetime.now()}
