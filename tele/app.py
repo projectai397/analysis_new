@@ -200,26 +200,72 @@ def send_broadcast(subscribers, message):
         send_telegram(chat_id, message)
 
 
+def _try_parse_json(response) -> dict | list | None:
+    try:
+        return response.json()
+    except Exception:
+        return None
+
+
+def _format_unhealthy_json(data: dict) -> str:
+    parts: list[str] = []
+    message = data.get("message")
+    if message:
+        parts.append(str(message))
+
+    stale_markets = data.get("staleMarkets")
+    if stale_markets:
+        if isinstance(stale_markets, list):
+            for item in stale_markets:
+                parts.append(f"• {item}")
+        else:
+            parts.append(str(stale_markets))
+
+    return "\n".join(parts) if parts else "healthy: false"
+
+
+def _format_http_error_detail(status_code: int, data, text: str) -> str:
+    if isinstance(data, dict):
+        err = data.get("error") or data.get("message") or data.get("detail")
+        if err is not None:
+            if isinstance(err, (dict, list)):
+                err = json.dumps(err, ensure_ascii=False)
+            return f"HTTP {status_code}: {err}"
+
+    body = (text or "").strip()
+    if body and len(body) <= 300:
+        return f"HTTP {status_code}: {body}"
+    return f"HTTP {status_code}"
+
+
 def check_website(url: str):
     try:
         r = requests.get(url, timeout=TIMEOUT, allow_redirects=True)
+        data = _try_parse_json(r)
+
+        if isinstance(data, dict) and data.get("healthy") is False:
+            return False, _format_unhealthy_json(data)
+
+        if isinstance(data, dict) and data.get("healthy") is True:
+            return True, str(data.get("message") or "healthy")
+
         if 200 <= r.status_code < 400:
             return True, f"HTTP {r.status_code}"
 
-        detail = f"HTTP {r.status_code}"
-        body = (r.text or "").strip()
-        if body:
-            try:
-                body = json.dumps(r.json(), indent=2)
-            except Exception:
-                pass
-            if len(body) > 500:
-                body = body[:500] + "..."
-            detail += f"\nResponse: {body}"
-
-        return False, detail
+        return False, _format_http_error_detail(r.status_code, data, r.text)
     except requests.exceptions.RequestException as e:
         return False, f"Connection error / timeout: {e}"
+
+
+def _build_website_down_message(
+    name: str, url: str, detail: str, now: str, *, still_down: bool
+) -> str:
+    status = "STILL DOWN" if still_down else "NOW DOWN"
+    lines = [f"❌ <b>{html.escape(name)}</b> is {status}", url]
+    if detail:
+        lines.append("\n".join(html.escape(line) for line in detail.splitlines()))
+    lines.append(f"Checked: {now}")
+    return "\n".join(lines)
 
 
 # ================= MAIN =================
@@ -534,24 +580,12 @@ def send_website_notifications():
 
         if last_status == "down" and last_down_time and (datetime.now() - last_down_time).total_seconds() >= 600:
             if not up:
-                escaped_detail = html.escape(detail)
-                msg = (
-                    f"❌ <b>{name}</b> is STILL DOWN\n"
-                    f"{url}\n"
-                    f"Reason: <code>{escaped_detail}</code>\n"
-                    f"Checked: {now}"
-                )
+                msg = _build_website_down_message(name, url, detail, now, still_down=True)
                 for chat_id in subscribers:
                     send_telegram(chat_id, msg)
                 website_status_cache[url]["time"] = datetime.now()
         elif last_status != "down" and not up:
-            escaped_detail = html.escape(detail)
-            msg = (
-                f"❌ <b>{name}</b> is NOW DOWN\n"
-                f"{url}\n"
-                f"Reason: <code>{escaped_detail}</code>\n"
-                f"Checked: {now}"
-            )
+            msg = _build_website_down_message(name, url, detail, now, still_down=False)
             for chat_id in subscribers:
                 send_telegram(chat_id, msg)
             website_status_cache[url] = {"status": "down", "time": datetime.now()}
