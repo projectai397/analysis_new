@@ -1,6 +1,5 @@
 from datetime import datetime
 import os
-import requests
 from pathlib import Path
 import shutil
 import subprocess
@@ -102,10 +101,7 @@ def upload_backup_to_s3(
     bucket: str | None = None,
     s3_prefix: str = "mongo_backup"
 ) -> dict:
-    """
-    Uploads the backup archive for date_str to S3.
-    Hits notification API on success using credentials from .env.
-    """
+    """Uploads the backup archive for date_str to S3."""
     date_str = date_str or datetime.now().strftime("%Y-%m-%d")
     root = Path(out_root).resolve()
 
@@ -126,45 +122,7 @@ def upload_backup_to_s3(
         s3 = _s3_client()
         logger.info(f"[backup] Uploading {archive_path} → s3://{bucket}/{key}")
         s3.upload_file(str(archive_path), bucket, key)
-
-        # ─── UPDATED NOTIFICATION LOGIC ───
-        try:
-            notif_url = os.environ.get("NOTIFICATION_URL")
-            auth_token = os.environ.get("STATIC_TOKEN") 
-            
-            if notif_url and auth_token:
-                headers = {
-                    "X-Auth-Token": auth_token,
-                    "Content-Type": "application/json"
-                }
-                payload = {
-                    "message": "database upload complete"
-                }
-
-                # Increased timeout to 30 seconds to handle slow server response
-                try:
-                    notif_res = requests.post(
-                        notif_url, 
-                        json=payload, 
-                        headers=headers, 
-                        timeout=60
-                    )
-                    
-                    if notif_res.status_code == 200:
-                        logger.info("✅Database backup upload complete!")
-                    else:
-                        logger.warning(f"✖ Notification failed (Status {notif_res.status_code}): {notif_res.text}")
-                
-                except requests.exceptions.Timeout:
-                    logger.error(f"✖ Notification TIMEOUT: Server at {notif_url} did not respond in 30s.")
-                except requests.exceptions.RequestException as req_e:
-                    logger.error(f"✖ Notification Network Error: {req_e}")
-            else:
-                logger.error("✖ Missing NOTIFICATION_URL or STATIC_TOKEN in .env")
-                
-        except Exception as e:
-            logger.error(f"✖ Notification logic failed: {e}")
-        # ──────────────────────────────────
+        logger.info("Database backup upload complete")
 
         return {
             "ok": True,

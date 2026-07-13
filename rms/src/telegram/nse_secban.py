@@ -6,7 +6,6 @@ from typing import Optional, Tuple
 import httpx
 
 from src.config import config
-from src.telegram.notify_external import post_cron_notification
 
 logger = logging.getLogger(__name__)
 
@@ -139,11 +138,8 @@ def run_daily_nse_secban() -> bool:
     content = download_csv(csv_url)
     if not content or not csv_has_data(content):
         logger.info("NSE secban CSV empty or no data, skipping notification")
-        post_cron_notification("job done 0 scripts ban notification sent")
         return False
-    script_count = count_script_lines(content)
     sent, ok = send_secban_to_superadmins(content)
     if ok:
         logger.info(f"NSE secban notification sent to {sent} superadmin/admin(s)")
-    post_cron_notification(f"job done {script_count} scripts ban notification sent")
     return ok
