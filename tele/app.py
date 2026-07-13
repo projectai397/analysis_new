@@ -32,6 +32,10 @@ BILLING_SHEET_NAME = os.getenv("BILLING_SHEET_NAME", "billing_info")  # Billing 
 API_RATE_LIMIT = int(os.getenv("API_RATE_LIMIT", 10))
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "10"))
+DEFAULT_WEBSITE_CHECK_INTERVAL_MINUTES = int(
+    os.getenv("DEFAULT_WEBSITE_CHECK_INTERVAL_MINUTES", "1")
+)
+DEFAULT_WEBSITE_CHECK_INTERVAL_SEC = DEFAULT_WEBSITE_CHECK_INTERVAL_MINUTES * 60
 
 TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage" if BOT_TOKEN else None
 logger = logging.getLogger(__name__)
@@ -174,6 +178,21 @@ def _approved_subscribers_from_rows(rows: list[dict]) -> set[str]:
         if subscriber and _is_approved(approve):
             subscribers.add(subscriber)
     return subscribers
+
+
+def _parse_check_interval_seconds(value: str) -> int:
+    """Parse sheet 'time' column (hours). Empty/invalid uses default interval."""
+    value = (value or "").strip()
+    if not value:
+        return DEFAULT_WEBSITE_CHECK_INTERVAL_SEC
+    try:
+        hours = float(value)
+        if hours <= 0:
+            return DEFAULT_WEBSITE_CHECK_INTERVAL_SEC
+        return int(hours * 3600)
+    except ValueError:
+        logger.warning("Invalid website check interval %r; using default", value)
+        return DEFAULT_WEBSITE_CHECK_INTERVAL_SEC
 
 # ================= HELPERS =================
 def send_telegram(chat_id: str, text: str):
@@ -552,7 +571,7 @@ def _fetch_websites_and_subscribers():
     _ensure_approve_header(website_ws)
 
     website_rows = website_ws.get_all_records()
-    websites: list[tuple[str, str]] = []
+    websites: list[tuple[str, str, int]] = []
     subscribers: set[str] = set()
 
     for r in website_rows:
@@ -560,40 +579,53 @@ def _fetch_websites_and_subscribers():
         url = _row_value(r, "url")
 
         if name and url:
-            websites.append((name, url))
+            interval_sec = _parse_check_interval_seconds(_row_value(r, "time"))
+            websites.append((name, url, interval_sec))
 
     subscribers = _approved_subscribers_from_rows(website_rows)
 
     return websites, subscribers
 
 
-def send_website_notifications():
+def send_website_notifications(*, force: bool = False):
     print("Starting website checks...")
     websites, subscribers = _fetch_websites_and_subscribers()
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    for name, url in websites:
-        up, detail = check_website(url)
+    for name, url, interval_sec in websites:
+        cache_entry = website_status_cache.setdefault(url, {})
+        last_checked = cache_entry.get("last_checked")
+        if (
+            not force
+            and last_checked
+            and (datetime.now() - last_checked).total_seconds() < interval_sec
+        ):
+            continue
 
-        last_status = website_status_cache.get(url, {}).get("status", None)
-        last_down_time = website_status_cache.get(url, {}).get("time", None)
+        up, detail = check_website(url)
+        cache_entry["last_checked"] = datetime.now()
+
+        last_status = cache_entry.get("status", None)
+        last_down_time = cache_entry.get("time", None)
 
         if last_status == "down" and last_down_time and (datetime.now() - last_down_time).total_seconds() >= 600:
             if not up:
                 msg = _build_website_down_message(name, url, detail, now, still_down=True)
                 for chat_id in subscribers:
                     send_telegram(chat_id, msg)
-                website_status_cache[url]["time"] = datetime.now()
+                cache_entry["time"] = datetime.now()
         elif last_status != "down" and not up:
             msg = _build_website_down_message(name, url, detail, now, still_down=False)
             for chat_id in subscribers:
                 send_telegram(chat_id, msg)
-            website_status_cache[url] = {"status": "down", "time": datetime.now()}
+            cache_entry["status"] = "down"
+            cache_entry["time"] = datetime.now()
         elif last_status == "down" and up:
             msg = f"✅ <b>{name}</b> is NOW WORKING\n{url}\nChecked: {now}"
             for chat_id in subscribers:
                 send_telegram(chat_id, msg)
-            website_status_cache[url] = {"status": "working", "time": None}
+            cache_entry["status"] = "working"
+            cache_entry["time"] = None
 
     print("Website checks done.")
 
@@ -724,7 +756,7 @@ def trigger_checks():
         return jsonify({"error": "Invalid mode. Use website|billing|all"}), 400
 
     if mode in {"website", "all"}:
-        _run_async(send_website_notifications, "webcheck-manual")
+        _run_async(lambda: send_website_notifications(force=True), "webcheck-manual")
     if mode in {"billing", "all"}:
         _run_async(send_billing_notifications, "billing-manual")
 
