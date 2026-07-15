@@ -1,6 +1,7 @@
 import html
 import json
 import os
+import re
 import requests
 import gspread
 import boto3
@@ -72,7 +73,29 @@ def _host_name() -> str:
         return "unknown-host"
 
 
+def _plain_notification_text(message: str) -> str:
+    return re.sub(r"<[^>]+>", "", message or "").strip()
+
+
+_SUPPRESSED_NOTIFICATION_PATTERNS = [
+    re.compile(r"analysis cron job done", re.I),
+    re.compile(r"database upload complete", re.I),
+    re.compile(r"job done send notification for \d+ admins?", re.I),
+    re.compile(r"job done \d+ scripts ban notification sent", re.I),
+    re.compile(r"local backup download completed", re.I),
+]
+
+
+def _is_suppressed_notification(message: str) -> bool:
+    text = _plain_notification_text(message)
+    return any(p.search(text) for p in _SUPPRESSED_NOTIFICATION_PATTERNS)
+
+
 def _post_notification(message: str) -> None:
+    if _is_suppressed_notification(message):
+        logger.info("Suppressed notification: %s", _plain_notification_text(message)[:120])
+        return
+
     notif_url = os.environ.get("NOTIFICATION_URL")
     auth_token = os.environ.get("STATIC_TOKEN")
     if not (notif_url and auth_token):
@@ -413,16 +436,7 @@ def upload_backup_to_s3(
     size_bytes: int | None = None
 
     if not archive_path.exists():
-        _post_notification(
-            _db_upload_message(
-                ok=False,
-                size_bytes=None,
-                bucket=bucket or os.environ.get("S3_BUCKET"),
-                key=None,
-                archive_path=str(archive_path),
-                error=f"No ZIP archive found for {date_str} at {archive_path}",
-            )
-        )
+        logger.error("No ZIP archive found for %s at %s", date_str, archive_path)
         return {
             "ok": False,
             "date": date_str,
@@ -438,16 +452,7 @@ def upload_backup_to_s3(
             size_bytes = archive_path.stat().st_size
         except Exception:
             size_bytes = None
-        _post_notification(
-            _db_upload_message(
-                ok=False,
-                size_bytes=size_bytes,
-                bucket=None,
-                key=None,
-                archive_path=str(archive_path),
-                error="S3 bucket not set (S3_BUCKET)",
-            )
-        )
+        logger.error("S3 bucket not set (S3_BUCKET)")
         return {
             "ok": False,
             "date": date_str,
@@ -468,16 +473,11 @@ def upload_backup_to_s3(
         s3 = _s3_client()
         logger.info("[backup] Uploading %s -> s3://%s/%s", archive_path, bucket, key)
         s3.upload_file(str(archive_path), bucket, key)
-
-        _post_notification(
-            _db_upload_message(
-                ok=True,
-                size_bytes=size_bytes,
-                bucket=bucket,
-                key=key,
-                archive_path=str(archive_path),
-                error=None,
-            )
+        logger.info(
+            "Database backup upload complete -> s3://%s/%s (%s)",
+            bucket,
+            key,
+            _human_bytes(size_bytes),
         )
 
         return {
@@ -489,16 +489,7 @@ def upload_backup_to_s3(
             "error": None,
         }
     except FileNotFoundError:
-        _post_notification(
-            _db_upload_message(
-                ok=False,
-                size_bytes=size_bytes,
-                bucket=bucket,
-                key=key,
-                archive_path=str(archive_path),
-                error="Archive file not found",
-            )
-        )
+        logger.error("Archive file not found: %s", archive_path)
         return {
             "ok": False,
             "date": date_str,
@@ -508,16 +499,7 @@ def upload_backup_to_s3(
             "error": "Archive file not found",
         }
     except NoCredentialsError:
-        _post_notification(
-            _db_upload_message(
-                ok=False,
-                size_bytes=size_bytes,
-                bucket=bucket,
-                key=key,
-                archive_path=str(archive_path),
-                error="AWS credentials not found/invalid",
-            )
-        )
+        logger.error("AWS credentials not found/invalid")
         return {
             "ok": False,
             "date": date_str,
@@ -527,16 +509,7 @@ def upload_backup_to_s3(
             "error": "AWS credentials not found/invalid",
         }
     except ClientError as e:
-        _post_notification(
-            _db_upload_message(
-                ok=False,
-                size_bytes=size_bytes,
-                bucket=bucket,
-                key=key,
-                archive_path=str(archive_path),
-                error=f"AWS error: {e}",
-            )
-        )
+        logger.error("AWS error: %s", e)
         return {
             "ok": False,
             "date": date_str,
@@ -546,16 +519,7 @@ def upload_backup_to_s3(
             "error": f"AWS error: {e}",
         }
     except Exception as e:
-        _post_notification(
-            _db_upload_message(
-                ok=False,
-                size_bytes=size_bytes,
-                bucket=bucket,
-                key=key,
-                archive_path=str(archive_path),
-                error=str(e),
-            )
-        )
+        logger.error("Backup upload failed: %s", e)
         return {
             "ok": False,
             "date": date_str,
@@ -726,6 +690,10 @@ def trigger_success_notification():
     # 4. Get Message Body
     data = request.get_json(silent=True) or {}
     message = data.get('message', "✅ <b>Notification sent successfully!</b>")
+
+    if _is_suppressed_notification(message):
+        logger.info("Suppressed /send_notifications: %s", _plain_notification_text(message)[:120])
+        return jsonify({"status": "suppressed", "message": "Notification suppressed."}), 202
 
     # 5. Send Notification in background (instant response)
     t = Thread(target=send_broadcast, args=(subscribers, message), daemon=True)
