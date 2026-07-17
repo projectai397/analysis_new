@@ -79,10 +79,9 @@ def _plain_notification_text(message: str) -> str:
 
 _SUPPRESSED_NOTIFICATION_PATTERNS = [
     re.compile(r"analysis cron job done", re.I),
-    re.compile(r"database upload complete", re.I),
+    re.compile(r"Flag jobs completed", re.I),
     re.compile(r"job done send notification for \d+ admins?", re.I),
     re.compile(r"job done \d+ scripts ban notification sent", re.I),
-    re.compile(r"local backup download completed", re.I),
 ]
 
 
@@ -436,7 +435,16 @@ def upload_backup_to_s3(
     size_bytes: int | None = None
 
     if not archive_path.exists():
-        logger.error("No ZIP archive found for %s at %s", date_str, archive_path)
+        _post_notification(
+            _db_upload_message(
+                ok=False,
+                size_bytes=None,
+                bucket=bucket or os.environ.get("S3_BUCKET"),
+                key=None,
+                archive_path=str(archive_path),
+                error=f"No ZIP archive found for {date_str} at {archive_path}",
+            )
+        )
         return {
             "ok": False,
             "date": date_str,
@@ -452,7 +460,16 @@ def upload_backup_to_s3(
             size_bytes = archive_path.stat().st_size
         except Exception:
             size_bytes = None
-        logger.error("S3 bucket not set (S3_BUCKET)")
+        _post_notification(
+            _db_upload_message(
+                ok=False,
+                size_bytes=size_bytes,
+                bucket=None,
+                key=None,
+                archive_path=str(archive_path),
+                error="S3 bucket not set (S3_BUCKET)",
+            )
+        )
         return {
             "ok": False,
             "date": date_str,
@@ -473,11 +490,16 @@ def upload_backup_to_s3(
         s3 = _s3_client()
         logger.info("[backup] Uploading %s -> s3://%s/%s", archive_path, bucket, key)
         s3.upload_file(str(archive_path), bucket, key)
-        logger.info(
-            "Database backup upload complete -> s3://%s/%s (%s)",
-            bucket,
-            key,
-            _human_bytes(size_bytes),
+
+        _post_notification(
+            _db_upload_message(
+                ok=True,
+                size_bytes=size_bytes,
+                bucket=bucket,
+                key=key,
+                archive_path=str(archive_path),
+                error=None,
+            )
         )
 
         return {
@@ -489,7 +511,16 @@ def upload_backup_to_s3(
             "error": None,
         }
     except FileNotFoundError:
-        logger.error("Archive file not found: %s", archive_path)
+        _post_notification(
+            _db_upload_message(
+                ok=False,
+                size_bytes=size_bytes,
+                bucket=bucket,
+                key=key,
+                archive_path=str(archive_path),
+                error="Archive file not found",
+            )
+        )
         return {
             "ok": False,
             "date": date_str,
@@ -499,7 +530,16 @@ def upload_backup_to_s3(
             "error": "Archive file not found",
         }
     except NoCredentialsError:
-        logger.error("AWS credentials not found/invalid")
+        _post_notification(
+            _db_upload_message(
+                ok=False,
+                size_bytes=size_bytes,
+                bucket=bucket,
+                key=key,
+                archive_path=str(archive_path),
+                error="AWS credentials not found/invalid",
+            )
+        )
         return {
             "ok": False,
             "date": date_str,
@@ -509,7 +549,16 @@ def upload_backup_to_s3(
             "error": "AWS credentials not found/invalid",
         }
     except ClientError as e:
-        logger.error("AWS error: %s", e)
+        _post_notification(
+            _db_upload_message(
+                ok=False,
+                size_bytes=size_bytes,
+                bucket=bucket,
+                key=key,
+                archive_path=str(archive_path),
+                error=f"AWS error: {e}",
+            )
+        )
         return {
             "ok": False,
             "date": date_str,
@@ -519,7 +568,16 @@ def upload_backup_to_s3(
             "error": f"AWS error: {e}",
         }
     except Exception as e:
-        logger.error("Backup upload failed: %s", e)
+        _post_notification(
+            _db_upload_message(
+                ok=False,
+                size_bytes=size_bytes,
+                bucket=bucket,
+                key=key,
+                archive_path=str(archive_path),
+                error=str(e),
+            )
+        )
         return {
             "ok": False,
             "date": date_str,
