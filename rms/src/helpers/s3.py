@@ -1,15 +1,17 @@
 from datetime import datetime
+import logging
 import os
 from pathlib import Path
 import shutil
 import subprocess
-from venv import logger
 import boto3
 from botocore.exceptions import NoCredentialsError, ClientError
 from src import config
+from src.helpers.notify_external import db_upload_success_message, post_notification
 from dotenv import load_dotenv
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 def _which(cmds: list[str]) -> str | None:
     """Return the first executable found in PATH from a list of candidate names."""
@@ -119,9 +121,15 @@ def upload_backup_to_s3(
     key = f"{s3_prefix}/{archive_path.name}"
 
     try:
+        try:
+            size_bytes = archive_path.stat().st_size
+        except Exception:
+            size_bytes = None
+
         s3 = _s3_client()
         logger.info(f"[backup] Uploading {archive_path} → s3://{bucket}/{key}")
         s3.upload_file(str(archive_path), bucket, key)
+        post_notification(db_upload_success_message(size_bytes))
         logger.info("Database backup upload complete")
 
         return {
@@ -163,36 +171,28 @@ def download_backup_from_s3(
 
     # Default date_str to today if None
     date_str = date_str or datetime.now().strftime("%Y-%m-%d")
-    root = Path(out_root).resolve()
-
-    archive_path = root / f"{date_str}.zip"
-    if not archive_path.exists():
-        return {"ok": False, "date": date_str, "archive_path": None,
-                "bucket": bucket, "key": None,
-                "error": f"No ZIP archive found for {date_str} at {archive_path}"}
+    archive_name = f"{date_str}.zip"
 
     bucket = bucket or os.environ.get("S3_BUCKET") or getattr(config, "S3_BUCKET", None)
     if not bucket:
-        return {"ok": False, "date": date_str, "archive_path": str(archive_path),
+        return {"ok": False, "date": date_str, "archive_path": None,
                 "bucket": None, "key": None, "error": "S3 bucket not set (S3_BUCKET)"}
 
-    key = f"{s3_prefix}/{archive_path.name}"  # e.g. mongo_update/2025-10-28.zip
+    key = f"{s3_prefix}/{archive_name}"
 
     try:
-        s3 = boto3.client('s3')  # Assuming your AWS credentials are set
-        logger.info(f"[backup] Downloading {key} from S3 to {local_download_dir}/{archive_path.name}")
+        s3 = _s3_client()
+        logger.info(f"[backup] Downloading {key} from S3 to {local_download_dir}/{archive_name}")
 
-        # Ensure the local download directory exists
-        download_path = Path(local_download_dir) / archive_path.name
+        download_path = Path(local_download_dir) / archive_name
         download_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Download from S3 to local path
+
         s3.download_file(bucket, key, str(download_path))
 
         return {
             "ok": True,
             "date": date_str,
-            "archive_path": str(archive_path),
+            "archive_path": str(download_path),
             "bucket": bucket,
             "key": key,
             "downloaded_to": str(download_path),
@@ -200,14 +200,14 @@ def download_backup_from_s3(
         }
 
     except FileNotFoundError:
-        return {"ok": False, "date": date_str, "archive_path": str(archive_path),
+        return {"ok": False, "date": date_str, "archive_path": None,
                 "bucket": bucket, "key": key, "error": "Archive file not found"}
     except NoCredentialsError:
-        return {"ok": False, "date": date_str, "archive_path": str(archive_path),
+        return {"ok": False, "date": date_str, "archive_path": None,
                 "bucket": bucket, "key": key, "error": "AWS credentials not found/invalid"}
     except ClientError as e:
-        return {"ok": False, "date": date_str, "archive_path": str(archive_path),
+        return {"ok": False, "date": date_str, "archive_path": None,
                 "bucket": bucket, "key": key, "error": f"AWS error: {e}"}
     except Exception as e:
-        return {"ok": False, "date": date_str, "archive_path": str(archive_path),
+        return {"ok": False, "date": date_str, "archive_path": None,
                 "bucket": bucket, "key": key, "error": str(e)}
